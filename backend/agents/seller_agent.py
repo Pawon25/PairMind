@@ -6,7 +6,6 @@ from models.deal_state import NegotiationState
 from retrieval.hybrid_retriever import seller_retrieve
 from tools.web_search import tavily_search
 
-client = Anthropic()
 
 SELLER_SYSTEM_PROMPT = """You are the Seller agent for ScanTech Industrial Solutions selling the SC-2400 Pro. Your goal is to close the 600-unit deal at the highest profitable price.
 
@@ -44,6 +43,7 @@ Required JSON schema:
 
 def run_seller_node(state: NegotiationState) -> NegotiationState:
     """Seller node: retrieve context + optional web search, call Claude, return updated state."""
+    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     # Build retrieval query from current terms
     if state["current_terms"]:
