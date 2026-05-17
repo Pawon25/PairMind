@@ -1,12 +1,24 @@
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router
 from ingestion.opensearch_store import create_index_if_not_exists
-from dotenv import load_dotenv
-from pathlib import Path
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
-app = FastAPI(title="PairMind", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle handler (replaces deprecated @app.on_event)."""
+    create_index_if_not_exists()
+    yield
+
+
+app = FastAPI(title="PairMind", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,11 +27,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup():
-    create_index_if_not_exists()
-
 app.include_router(router)
+
 
 @app.get("/health")
 async def health():

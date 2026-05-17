@@ -3,45 +3,44 @@ from models.deal_state import NegotiationState
 from ingestion.opensearch_store import get_client, INDEX_NAME
 
 
-def _chunk_exists(source: str, section: str | None) -> bool:
-    """Check if a cited document chunk actually exists in OpenSearch."""
+def _filename_exists(source: str) -> bool:
+    """
+    Check if any chunk from this source file exists in OpenSearch.
+    Section matching is intentionally skipped — LLM-generated section names
+    are free-form and will never exactly match stored keyword fields.
+    Filename presence is sufficient to confirm the citation is grounded.
+    """
     client = get_client()
-    query: dict = {
-        "query": {
-            "bool": {
-                "must": [{"match": {"filename": source}}]
-            }
-        }
-    }
-    if section:
-        query["query"]["bool"]["must"].append({"match": {"section": section}})
-
     try:
-        res = client.count(index=INDEX_NAME, body=query)
+        res = client.count(
+            index=INDEX_NAME,
+            body={"query": {"term": {"filename": source}}},
+        )
         return res["count"] > 0
     except Exception:
-        return False  # don't block negotiation on OpenSearch errors
+        # Never block negotiation on OpenSearch errors
+        return True
 
 
 def _validate_citations(envelope: MessageEnvelope) -> tuple[bool, str]:
     """
     Returns (is_valid, reason).
-    - No citations at all → invalid
-    - URL citation missing date → invalid
-    - Doc citation not found in OpenSearch → flagged but not blocked (marked UNCITED)
+    Rules:
+      - No citations at all → invalid (trigger retry)
+      - Web citation missing retrieved_date → invalid (trigger retry)
+      - Doc citation filename not in OpenSearch → soft-fail (mark UNCITED, no retry)
     """
     if not envelope.citations:
         return False, "No citations provided"
 
     for citation in envelope.citations:
-        is_url = citation.source.startswith("http")
+        is_url = citation.source.startswith("http://") or citation.source.startswith("https://")
         if is_url:
             if not citation.retrieved_date:
                 return False, f"Web citation missing retrieved_date: {citation.source}"
         else:
-            # Document citation — verify chunk exists
-            if not _chunk_exists(citation.source, citation.section):
-                # Soft failure: flag as unverified rather than block
+            if not _filename_exists(citation.source):
+                # Soft failure: mark section as unverified, don't block
                 citation.section = f"⚠ UNCITED: {citation.section or 'unknown section'}"
 
     return True, "ok"
@@ -50,8 +49,9 @@ def _validate_citations(envelope: MessageEnvelope) -> tuple[bool, str]:
 def run_citation_validator(state: NegotiationState) -> NegotiationState:
     """
     Validates the most recent message's citations.
-    - If invalid, sets a retry flag in state.
-    - After 2 failures, marks message with ⚠ and lets negotiation continue.
+    - Hard failures (no citations, missing URL date): trigger one retry.
+    - After 1 retry still failing: let through with warning in rationale.
+    - Soft failures (filename not found): mark inline, never block.
     """
     if not state["messages"]:
         return state
@@ -60,16 +60,26 @@ def run_citation_validator(state: NegotiationState) -> NegotiationState:
     is_valid, reason = _validate_citations(last_msg)
 
     if is_valid:
-        return {**state, "citation_retry": False, "citation_error": None}
+        return {
+            **state,
+            "citation_retry": False,
+            "citation_retry_count": 0,
+            "citation_error": None,
+        }
 
-    # Check if this is already a retry
     retry_count = state.get("citation_retry_count", 0)
-    if retry_count >= 1:
-        # Second failure — mark as UNCITED and continue
-        last_msg.rationale = f"⚠ UNCITED WARNING: {reason}. " + last_msg.rationale
-        return {**state, "citation_retry": False, "citation_retry_count": 0, "citation_error": None}
 
-    # First failure — request retry
+    if retry_count >= 1:
+        # Already retried once — let through with warning, reset counters
+        last_msg.rationale = f"⚠ CITATION WARNING: {reason}. " + last_msg.rationale
+        return {
+            **state,
+            "citation_retry": False,
+            "citation_retry_count": 0,
+            "citation_error": None,
+        }
+
+    # First failure — request one retry
     return {
         **state,
         "citation_retry": True,

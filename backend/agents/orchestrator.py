@@ -16,7 +16,7 @@ HARD_CAP = 15
 # ── Termination Check ─────────────────────────────────────────────────────────
 
 def check_termination(state: NegotiationState) -> Literal["buyer", "end"]:
-    """Conditional edge after seller+validator. Decides: loop or end."""
+    """Conditional edge after seller node. Decides: loop back to buyer or end."""
 
     # 1. Explicit outcome already set (WALK_AWAY from either agent)
     if state.get("outcome"):
@@ -26,7 +26,7 @@ def check_termination(state: NegotiationState) -> Literal["buyer", "end"]:
     if state["turn_count"] >= HARD_CAP:
         return "end"
 
-    # 3. Agreement — both last two messages are ACCEPT on identical terms
+    # 3. Agreement — last two messages are ACCEPT on identical terms
     msgs = state["messages"]
     if len(msgs) >= 2:
         last_two = msgs[-2:]
@@ -36,7 +36,7 @@ def check_termination(state: NegotiationState) -> Literal["buyer", "end"]:
         ):
             return "end"
 
-    # 4. Deadlock — DealTerms unchanged for last 3 turns
+    # 4. Deadlock — DealTerms unchanged for last 3 consecutive turns
     history = state.get("last_terms_history", [])
     if len(history) >= 3:
         if history[-1] == history[-2] == history[-3]:
@@ -45,11 +45,7 @@ def check_termination(state: NegotiationState) -> Literal["buyer", "end"]:
     return "buyer"
 
 
-# ── Summary Emitter ───────────────────────────────────────────────────────────
-
-def _terms_equal(a: DealTerms, b: DealTerms) -> bool:
-    return a.model_dump() == b.model_dump()
-
+# ── Summary Builder ───────────────────────────────────────────────────────────
 
 def build_summary(state: NegotiationState, duration_seconds: float) -> dict:
     msgs = state["messages"]
@@ -57,51 +53,59 @@ def build_summary(state: NegotiationState, duration_seconds: float) -> dict:
     # Determine outcome
     outcome = state.get("outcome")
     if not outcome:
-        if state["turn_count"] >= HARD_CAP:
-            outcome = "TIMEOUT"
-        elif len(msgs) >= 2 and all(m.msg_type == MsgType.ACCEPT for m in msgs[-2:]):
+        if len(msgs) >= 2 and all(m.msg_type == MsgType.ACCEPT for m in msgs[-2:]):
             outcome = "AGREEMENT"
         else:
             history = state.get("last_terms_history", [])
             if len(history) >= 3 and history[-1] == history[-2] == history[-3]:
                 outcome = "DEADLOCK"
+            elif state["turn_count"] >= HARD_CAP:
+                outcome = "TIMEOUT"
             else:
                 outcome = "TIMEOUT"
 
-    total_tokens = 0  # token counting handled externally via LangSmith or logs
-    per_agent_citations = {"buyer": 0, "seller": 0}
+    # Real token counting from message envelopes
+    total_input_tokens  = sum(m.input_tokens  for m in msgs)
+    total_output_tokens = sum(m.output_tokens for m in msgs)
+    total_tokens        = total_input_tokens + total_output_tokens
+
+    per_agent_tokens = {}
+    per_agent_citations = {}
     for m in msgs:
-        per_agent_citations[m.agent_id] = per_agent_citations.get(m.agent_id, 0) + len(m.citations)
+        aid = m.agent_id
+        per_agent_tokens[aid]     = per_agent_tokens.get(aid, 0) + m.input_tokens + m.output_tokens
+        per_agent_citations[aid]  = per_agent_citations.get(aid, 0) + len(m.citations)
 
     return {
-        "outcome": outcome,
-        "final_terms": state["current_terms"].model_dump() if state["current_terms"] else None,
-        "turn_count": state["turn_count"],
-        "total_tokens": total_tokens,
-        "duration_seconds": round(duration_seconds, 2),
-        "per_agent_citations": per_agent_citations,
+        "outcome":              outcome,
+        "final_terms":          state["current_terms"].model_dump() if state["current_terms"] else None,
+        "turn_count":           state["turn_count"],
+        "total_tokens":         total_tokens,
+        "total_input_tokens":   total_input_tokens,
+        "total_output_tokens":  total_output_tokens,
+        "per_agent_tokens":     per_agent_tokens,
+        "per_agent_citations":  per_agent_citations,
+        "duration_seconds":     round(duration_seconds, 2),
     }
 
 
 # ── Retry-aware agent wrappers ────────────────────────────────────────────────
 
 def buyer_with_retry(state: NegotiationState) -> NegotiationState:
-    """Run buyer, then validator. If validator requests retry, re-run buyer once."""
+    """Run buyer → validate citations → retry once if needed."""
     state = run_buyer_node(state)
     state = run_citation_validator(state)
 
     if state.get("citation_retry"):
-        # Inject error hint into last user message context via state flag
         state = run_buyer_node(state)
         state = run_citation_validator(state)
 
-    state["citation_retry"] = False
-    state["citation_retry_count"] = 0
-    return state
+    # Always clear retry flags after this node completes
+    return {**state, "citation_retry": False, "citation_retry_count": 0}
 
 
 def seller_with_retry(state: NegotiationState) -> NegotiationState:
-    """Run seller, then validator. If validator requests retry, re-run seller once."""
+    """Run seller → validate citations → retry once if needed."""
     state = run_seller_node(state)
     state = run_citation_validator(state)
 
@@ -109,9 +113,7 @@ def seller_with_retry(state: NegotiationState) -> NegotiationState:
         state = run_seller_node(state)
         state = run_citation_validator(state)
 
-    state["citation_retry"] = False
-    state["citation_retry_count"] = 0
-    return state
+    return {**state, "citation_retry": False, "citation_retry_count": 0}
 
 
 # ── Graph Definition ──────────────────────────────────────────────────────────
@@ -119,15 +121,11 @@ def seller_with_retry(state: NegotiationState) -> NegotiationState:
 def build_graph() -> StateGraph:
     graph = StateGraph(NegotiationState)
 
-    graph.add_node("buyer", buyer_with_retry)
+    graph.add_node("buyer",  buyer_with_retry)
     graph.add_node("seller", seller_with_retry)
 
     graph.set_entry_point("buyer")
-
-    # buyer → seller (always)
     graph.add_edge("buyer", "seller")
-
-    # seller → termination check → loop or end
     graph.add_conditional_edges(
         "seller",
         check_termination,
@@ -137,22 +135,21 @@ def build_graph() -> StateGraph:
     return graph.compile()
 
 
-# ── Public runner ─────────────────────────────────────────────────────────────
+# ── Standalone runner (for testing) ──────────────────────────────────────────
 
 def run_negotiation(session_id: str | None = None) -> dict:
-    """Run a full negotiation and return the summary."""
     session_id = session_id or str(uuid.uuid4())
 
     initial_state: NegotiationState = {
-        "session_id": session_id,
-        "messages": [],
-        "current_terms": None,
-        "turn_count": 0,
-        "outcome": None,
-        "last_terms_history": [],
-        "citation_retry": False,
+        "session_id":           session_id,
+        "messages":             [],
+        "current_terms":        None,
+        "turn_count":           0,
+        "outcome":              None,
+        "last_terms_history":   [],
+        "citation_retry":       False,
         "citation_retry_count": 0,
-        "citation_error": None,
+        "citation_error":       None,
     }
 
     graph = build_graph()
