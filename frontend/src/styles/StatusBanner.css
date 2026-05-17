@@ -1,0 +1,23 @@
+.status-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.status-negotiating { background: #EFF6FF; color: #1D4ED8; }
+.status-agreement   { background: var(--green-light); color: #065F46; }
+.status-walkaway    { background: var(--red-light);   color: #991B1B; }
+.status-deadlock    { background: var(--slate-light); color: var(--slate); }
+.status-timeout     { background: #FFF7ED; color: #92400E; }
+.status-error       { background: var(--red-light);   color: #991B1B; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin { animation: spin 1.2s linear infinite; }

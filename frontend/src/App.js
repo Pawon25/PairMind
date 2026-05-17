@@ -1,25 +1,36 @@
-import logo from './logo.svg';
+import React, { useState } from 'react';
+import Stepper from './components/Stepper';
+import UploadPanel from './components/UploadPanel';
+import NegotiateView from './components/NegotiateView';
 import './App.css';
 
-function App() {
+export default function App() {
+  const [step, setStep] = useState(1);
+  const [sessionId, setSessionId] = useState(null);
+
+  const handleNegotiationStart = (id) => {
+    setSessionId(id);
+    setStep(2);
+  };
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
+    <div className="app">
+      <header className="app-header">
+        <div className="app-logo">
+          <span className="logo-icon">⚡</span>
+          <span className="logo-text">PairMind</span>
+        </div>
+        <Stepper currentStep={step} />
       </header>
+
+      <main className="app-main">
+        {step === 1 && (
+          <UploadPanel onStart={handleNegotiationStart} />
+        )}
+        {step === 2 && sessionId && (
+          <NegotiateView sessionId={sessionId} />
+        )}
+      </main>
     </div>
   );
 }
-
-export default App;
