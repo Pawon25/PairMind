@@ -5,7 +5,6 @@ from models.message_envelope import MessageEnvelope, MsgType, DealTerms, Citatio
 from models.deal_state import NegotiationState
 from retrieval.hybrid_retriever import buyer_retrieve
 
-client = Anthropic()
 
 BUYER_SYSTEM_PROMPT = """You are the Buyer agent for Meridian Logistics. Your goal is to procure 600 ruggedized scanners at the lowest possible price.
 
@@ -43,6 +42,7 @@ Required JSON schema:
 
 def run_buyer_node(state: NegotiationState) -> NegotiationState:
     """Buyer node: retrieve context, call Claude, return updated state."""
+    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     # Build retrieval query from current terms or open with RFQ
     if state["current_terms"]:
