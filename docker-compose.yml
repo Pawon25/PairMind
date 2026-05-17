@@ -1,0 +1,42 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: pairmind-opensearch
+    environment:
+      - discovery.type=single-node
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin@123456
+      - plugins.security.disabled=true
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: pairmind-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+
+  frontend:
+    build: ./frontend
+    container_name: pairmind-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  opensearch-data:
