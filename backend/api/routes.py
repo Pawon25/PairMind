@@ -46,20 +46,21 @@ async def upload_document(
     suffix = Path(file.filename).suffix.lower()
     content = await file.read()
 
-    # Write to a named temp file so load_document (which needs a path) can read it
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
         docs = load_document(tmp_path, tag=tag)
-        # Ensure filename metadata reflects the original name, not the temp path
         for doc in docs:
             doc.metadata["filename"] = file.filename
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
     chunks = chunk_documents(docs)
+    if not chunks:
+        raise HTTPException(422, f"No chunks extracted from '{file.filename}'. Check file content.")
+
     embeddings = embed_texts([c.page_content for c in chunks])
     upsert_chunks(chunks, embeddings)
 
@@ -82,21 +83,21 @@ async def start_negotiation():
     session_id = str(uuid.uuid4())
 
     initial_state: NegotiationState = {
-        "session_id": session_id,
-        "messages": [],
-        "current_terms": None,
-        "turn_count": 0,
-        "outcome": None,
-        "last_terms_history": [],
-        "citation_retry": False,
+        "session_id":           session_id,
+        "messages":             [],
+        "current_terms":        None,
+        "turn_count":           0,
+        "outcome":              None,
+        "last_terms_history":   [],
+        "citation_retry":       False,
         "citation_retry_count": 0,
-        "citation_error": None,
+        "citation_error":       None,
     }
 
     _sessions[session_id] = {
-        "state": initial_state,
-        "events": [],
-        "done": False,
+        "state":   initial_state,
+        "events":  [],
+        "done":    False,
         "summary": None,
     }
 
@@ -111,13 +112,11 @@ async def _run_negotiation_task(session_id: str, initial_state: NegotiationState
     start = time.time()
 
     try:
-        # stream_mode="values" yields the full state snapshot after every node execution
         for state_snapshot in graph.stream(initial_state, stream_mode="values"):
             msgs = state_snapshot.get("messages", [])
             if not msgs:
                 continue
 
-            # Only emit when a new message has actually been appended
             last_msg = msgs[-1]
             already_sent = sum(1 for e in session["events"] if e.get("type") == "turn")
             if last_msg.turn <= already_sent:
@@ -125,16 +124,17 @@ async def _run_negotiation_task(session_id: str, initial_state: NegotiationState
 
             session["state"] = state_snapshot
             session["events"].append({
-                "type":      "turn",
-                "turn":      last_msg.turn,
-                "agent_id":  last_msg.agent_id,
-                "msg_type":  last_msg.msg_type.value,
-                "payload":   last_msg.payload.model_dump(),
-                "rationale": last_msg.rationale,
-                "citations": [c.model_dump() for c in last_msg.citations],
+                "type":          "turn",
+                "turn":          last_msg.turn,
+                "agent_id":      last_msg.agent_id,
+                "msg_type":      last_msg.msg_type.value,
+                "payload":       last_msg.payload.model_dump(),
+                "rationale":     last_msg.rationale,
+                "citations":     [c.model_dump() for c in last_msg.citations],
+                "input_tokens":  last_msg.input_tokens,
+                "output_tokens": last_msg.output_tokens,
             })
 
-        # Final state after graph exits
         final_state = session["state"]
         duration = time.time() - start
         summary = build_summary(final_state, duration)
@@ -143,7 +143,12 @@ async def _run_negotiation_task(session_id: str, initial_state: NegotiationState
         session["events"].append({"type": "summary", **summary})
 
     except Exception as e:
-        session["events"].append({"type": "error", "message": str(e)})
+        import traceback
+        session["events"].append({
+            "type":    "error",
+            "message": str(e),
+            "detail":  traceback.format_exc(),
+        })
 
     finally:
         session["done"] = True
@@ -160,7 +165,7 @@ async def stream_negotiation(session_id: str):
         _sse_generator(session_id),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control":    "no-cache",
             "X-Accel-Buffering": "no",
         },
     )
