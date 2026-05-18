@@ -4,6 +4,10 @@ from anthropic import Anthropic
 from models.message_envelope import MessageEnvelope, MsgType, DealTerms, Citation
 from models.deal_state import NegotiationState
 from retrieval.hybrid_retriever import buyer_retrieve
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 # Valid state transitions: what msg_types are allowed given the last message
 _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
@@ -65,6 +69,7 @@ def _allowed_types(state: NegotiationState) -> list[MsgType]:
 
 def run_buyer_node(state: NegotiationState) -> NegotiationState:
     """Buyer node: retrieve context, call Claude, enforce state transitions, return updated state."""
+    logger.info(f"[BUYER] Turn {state['turn_count']} starting...")
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -155,6 +160,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     outcome = None
     if envelope.msg_type == MsgType.WALK_AWAY:
         outcome = "WALK_AWAY"
+    logger.info(f"[BUYER] Turn {state['turn_count']} done — {envelope.msg_type}")
 
     return {
         **state,

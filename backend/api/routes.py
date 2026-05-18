@@ -111,47 +111,50 @@ async def _run_negotiation_task(session_id: str, initial_state: NegotiationState
     graph = build_graph()
     start = time.time()
 
-    try:
-        for state_snapshot in graph.stream(initial_state, stream_mode="values"):
-            msgs = state_snapshot.get("messages", [])
-            if not msgs:
-                continue
+    def run_graph():
+        try:
+            for state_snapshot in graph.stream(initial_state, stream_mode="values"):
+                msgs = state_snapshot.get("messages", [])
+                if not msgs:
+                    continue
 
-            last_msg = msgs[-1]
-            already_sent = sum(1 for e in session["events"] if e.get("type") == "turn")
-            if last_msg.turn <= already_sent:
-                continue
+                last_msg = msgs[-1]
+                already_sent = sum(1 for e in session["events"] if e.get("type") == "turn")
+                if last_msg.turn <= already_sent:
+                    continue
 
-            session["state"] = state_snapshot
+                session["state"] = state_snapshot
+                session["events"].append({
+                    "type":          "turn",
+                    "turn":          last_msg.turn,
+                    "agent_id":      last_msg.agent_id,
+                    "msg_type":      last_msg.msg_type.value,
+                    "payload":       last_msg.payload.model_dump(),
+                    "rationale":     last_msg.rationale,
+                    "citations":     [c.model_dump() for c in last_msg.citations],
+                    "input_tokens":  last_msg.input_tokens,
+                    "output_tokens": last_msg.output_tokens,
+                })
+
+            final_state = session["state"]
+            duration = time.time() - start
+            summary = build_summary(final_state, duration)
+            summary["session_id"] = session_id
+            session["summary"] = summary
+            session["events"].append({"type": "summary", **summary})
+
+        except Exception as e:
+            import traceback
             session["events"].append({
-                "type":          "turn",
-                "turn":          last_msg.turn,
-                "agent_id":      last_msg.agent_id,
-                "msg_type":      last_msg.msg_type.value,
-                "payload":       last_msg.payload.model_dump(),
-                "rationale":     last_msg.rationale,
-                "citations":     [c.model_dump() for c in last_msg.citations],
-                "input_tokens":  last_msg.input_tokens,
-                "output_tokens": last_msg.output_tokens,
+                "type":    "error",
+                "message": str(e),
+                "detail":  traceback.format_exc(),
             })
+        finally:
+            session["done"] = True
 
-        final_state = session["state"]
-        duration = time.time() - start
-        summary = build_summary(final_state, duration)
-        summary["session_id"] = session_id
-        session["summary"] = summary
-        session["events"].append({"type": "summary", **summary})
-
-    except Exception as e:
-        import traceback
-        session["events"].append({
-            "type":    "error",
-            "message": str(e),
-            "detail":  traceback.format_exc(),
-        })
-
-    finally:
-        session["done"] = True
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, run_graph)
 
 
 # ── GET /negotiate/{id}/stream ────────────────────────────────────────────────
