@@ -93,7 +93,16 @@ def run_buyer_node(state: NegotiationState) -> NegotiationState:
     history = []
     for msg in state["messages"]:
         role = "assistant" if msg.agent_id == "buyer" else "user"
-        history.append({"role": role, "content": msg.model_dump_json()})
+        if msg.agent_id == "buyer":
+            content = msg.model_dump_json()
+        else:
+            content = json.dumps({
+                "agent_id": msg.agent_id,
+                "msg_type": msg.msg_type.value,
+                "payload": msg.payload.model_dump(),
+                "turn": msg.turn,
+            })
+        history.append({"role": role, "content": content})
 
     turn = state["turn_count"] + 1
     allowed = _allowed_types(state)
