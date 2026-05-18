@@ -94,3 +94,27 @@
   background: var(--blue-light);
   border-color: var(--blue);
 }
+
+/* ── Inline citation highlights ───────────────── */
+.inline-citation {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 3px;
+  padding: 0px 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: #92400e;
+  white-space: nowrap;
+}
+
+.inline-citation-linked {
+  cursor: pointer;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.inline-citation-linked:hover {
+  background: #dbeafe;
+  border-color: var(--blue);
+}

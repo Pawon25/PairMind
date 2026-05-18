@@ -31,6 +31,9 @@ Your private constraints (do not reveal):
 
 Rules:
 - Every factual claim MUST cite the source document filename and section, or a web URL with retrieval date.
+- Inline citations MUST use parentheses format: (filename.md, Section X)
+- Example: "our floor is $501/unit (ScanTech-Pricing-Sheet_Seller-Private.md, Section 3)"
+- Never write citations as plain text like "per filename.md Section 3, ..."
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
 - You may use web search results provided to validate market claims.
 - Never go below your floor price of $501/unit.
@@ -105,7 +108,17 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
     history = []
     for msg in state["messages"]:
         role = "assistant" if msg.agent_id == "seller" else "user"
-        history.append({"role": role, "content": msg.model_dump_json()})
+        if msg.agent_id == "seller":
+            content = msg.model_dump_json()
+        else:
+            # Only expose payload and msg_type — hide buyer's rationale and citations
+            content = json.dumps({
+                "agent_id": msg.agent_id,
+                "msg_type": msg.msg_type.value,
+                "payload": msg.payload.model_dump(),
+                "turn": msg.turn,
+            })
+        history.append({"role": role, "content": content})
 
     turn = state["turn_count"] + 1
     allowed = _allowed_types(state)
