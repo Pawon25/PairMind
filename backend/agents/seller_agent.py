@@ -5,6 +5,10 @@ from models.message_envelope import MessageEnvelope, MsgType, DealTerms, Citatio
 from models.deal_state import NegotiationState
 from retrieval.hybrid_retriever import seller_retrieve
 from tools.web_search import tavily_search
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 # Valid state transitions: what msg_types are allowed given the last buyer message
 _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
@@ -67,6 +71,7 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
     """Seller node: retrieve context + optional web search, call Claude, return updated state."""
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    logger.info(f"[Seller] Turn {state['turn_count']} starting...")
 
     # Build retrieval query
     if state["current_terms"]:
@@ -174,6 +179,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     outcome = None
     if envelope.msg_type == MsgType.WALK_AWAY:
         outcome = "WALK_AWAY"
+    logger.info(f"[Seller] Turn {state['turn_count']} done — {envelope.msg_type}")
 
     return {
         **state,
