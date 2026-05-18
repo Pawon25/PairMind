@@ -34,6 +34,9 @@ Rules:
 - Use WALK_AWAY if walk-away criteria are met.
 - All market benchmark claims must cite Meridian-Procurement-Memo_Buyer-Private.md.
 - First message must be msg_type PROPOSE.
+- Inline citations MUST use parentheses format: (filename.md, Section X)
+- Example: "budget ceiling is $580/unit (Meridian-Procurement-Memo_Buyer-Private.md, Section 1)"
+- Never write citations as plain text like "per filename.md Section 3, ..."
 
 Required JSON schema:
 {
