@@ -144,6 +144,18 @@ Return your response as valid JSON only — no markdown, no extra text."""
 
     data = json.loads(raw)
     data["turn"] = turn
+    
+    if not data.get("payload") or any(v is None for v in data["payload"].values()):
+        if state["current_terms"]:
+            data["payload"] = state["current_terms"].model_dump()
+        else:
+            data["payload"] = {
+                "unit_price": 0.0,
+                "quantity": 600,
+                "delivery_date": "2026-08-30",
+                "payment_terms": "Net-60",
+                "warranty_years": 2,
+            }
 
     # Enforce valid state transition
     requested_type = MsgType(data["msg_type"])
