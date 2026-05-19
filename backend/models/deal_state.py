@@ -4,11 +4,12 @@ from .message_envelope import MessageEnvelope, DealTerms
 
 class NegotiationState(TypedDict):
     session_id: str
-    messages: List[MessageEnvelope]        # full conversation history (shared)
-    current_terms: Optional[DealTerms]     # last proposed structured terms
+    messages: List[MessageEnvelope]
+    current_terms: Optional[DealTerms]
     turn_count: int
-    outcome: Optional[str]                 # AGREEMENT | WALK_AWAY | DEADLOCK | TIMEOUT
-    last_terms_history: List[DealTerms]    # last 3 DealTerms snapshots for deadlock detection
-    citation_retry: bool                   # flag: agent must revise its last message
-    citation_retry_count: int              # number of retries attempted this turn
-    citation_error: Optional[str]          # reason for last citation failure
+    outcome: Optional[str]
+    last_terms_history: List[DealTerms]
+    citation_retry: bool
+    citation_retry_count: int
+    citation_error: Optional[str]
+    uploaded_files: List[dict]  # [{"filename": "...", "tag": "..."}]

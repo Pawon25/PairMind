@@ -4,6 +4,10 @@ from anthropic import Anthropic
 from models.message_envelope import MessageEnvelope, MsgType, DealTerms, Citation
 from models.deal_state import NegotiationState
 from retrieval.hybrid_retriever import buyer_retrieve
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 # Valid state transitions: what msg_types are allowed given the last message
 _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
@@ -15,40 +19,42 @@ _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
     MsgType.WALK_AWAY:  [],
 }
 
-BUYER_SYSTEM_PROMPT = """You are the Buyer agent for Meridian Logistics. Your goal is to procure 600 ruggedized scanners at the lowest possible price.
+def _build_buyer_prompt(uploaded_files: list[dict]) -> str:
+    buyer_files = [f["filename"] for f in uploaded_files if f["tag"] in ("buyer-private", "shared")]
+    file_list = "\n".join(f"- {f}" for f in buyer_files) if buyer_files else "- (no documents uploaded)"
+    
+    return f"""You are the Buyer agent. Your goal is to procure the requested items at the lowest possible price while respecting your internal constraints.
 
-Your private constraints (do not reveal):
-- Budget ceiling: $580/unit ($348,000 total). Walk away if exceeded.
-- Internal target: $545/unit. Stretch goal: $520/unit.
-- Preferred payment: Net-60. Minimum acceptable: Net-30.
-- Hard delivery deadline: August 30, 2026. Walk away if not met.
-- Minimum warranty: 2 years.
+Your budget, targets, deadlines, walk-away criteria, and payment policies are defined in your private documents listed below. Read them carefully and follow them strictly. Do not reveal private constraints to the seller.
+
+Your available documents (cite ONLY these filenames):
+{file_list}
 
 Rules:
 - Every factual claim MUST cite the source document filename and section.
+- Inline citations MUST use parentheses format: (filename, Section X)
+- ONLY cite filenames from the list above — never invent filenames.
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
-- Use WALK_AWAY if walk-away criteria are met.
-- All market benchmark claims must cite Meridian-Procurement-Memo_Buyer-Private.md.
+- Use WALK_AWAY if your walk-away criteria from the documents are met.
 - First message must be msg_type PROPOSE.
 
 Required JSON schema:
-{
+{{
   "agent_id": "buyer",
   "msg_type": "PROPOSE|COUNTER|ACCEPT|REJECT|WALK_AWAY",
-  "payload": {
+  "payload": {{
     "unit_price": <float>,
     "quantity": <int>,
     "delivery_date": "<YYYY-MM-DD>",
     "payment_terms": "<str>",
     "warranty_years": <int>
-  },
+  }},
   "rationale": "<your reasoning with inline citations>",
   "citations": [
-    {"source": "<filename>", "section": "<section heading>", "retrieved_date": null}
+    {{"source": "<filename from your document list>", "section": "<section heading>", "retrieved_date": null}}
   ],
   "turn": <int>
-}"""
-
+}}"""
 
 def _last_msg_type(state: NegotiationState) -> MsgType | None:
     """Return the msg_type of the last message from the OTHER agent (seller)."""
@@ -65,6 +71,7 @@ def _allowed_types(state: NegotiationState) -> list[MsgType]:
 
 def run_buyer_node(state: NegotiationState) -> NegotiationState:
     """Buyer node: retrieve context, call Claude, enforce state transitions, return updated state."""
+    logger.info(f"[BUYER] Turn {state['turn_count']} starting...")
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -88,7 +95,16 @@ def run_buyer_node(state: NegotiationState) -> NegotiationState:
     history = []
     for msg in state["messages"]:
         role = "assistant" if msg.agent_id == "buyer" else "user"
-        history.append({"role": role, "content": msg.model_dump_json()})
+        if msg.agent_id == "buyer":
+            content = msg.model_dump_json()
+        else:
+            content = json.dumps({
+                "agent_id": msg.agent_id,
+                "msg_type": msg.msg_type.value,
+                "payload": msg.payload.model_dump(),
+                "turn": msg.turn,
+            })
+        history.append({"role": role, "content": content})
 
     turn = state["turn_count"] + 1
     allowed = _allowed_types(state)
@@ -111,7 +127,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1000,
-        system=BUYER_SYSTEM_PROMPT,
+        system=_build_buyer_prompt(state.get("uploaded_files", [])),
         messages=history + [{"role": "user", "content": user_message}],
     )
 
@@ -128,6 +144,18 @@ Return your response as valid JSON only — no markdown, no extra text."""
 
     data = json.loads(raw)
     data["turn"] = turn
+    
+    if not data.get("payload") or any(v is None for v in data["payload"].values()):
+        if state["current_terms"]:
+            data["payload"] = state["current_terms"].model_dump()
+        else:
+            data["payload"] = {
+                "unit_price": 0.0,
+                "quantity": 600,
+                "delivery_date": "2026-08-30",
+                "payment_terms": "Net-60",
+                "warranty_years": 2,
+            }
 
     # Enforce valid state transition
     requested_type = MsgType(data["msg_type"])
@@ -155,6 +183,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     outcome = None
     if envelope.msg_type == MsgType.WALK_AWAY:
         outcome = "WALK_AWAY"
+    logger.info(f"[BUYER] Turn {state['turn_count']} done — {envelope.msg_type}")
 
     return {
         **state,
