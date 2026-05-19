@@ -274,7 +274,7 @@ WALK_AWAY       → negotiation ends immediately
 
 ## 4. Prompt Design
 
-### 4.1 Buyer Agent System Prompt
+### 4.1 Buyer Agent System Prompt(Sample: Used placeholders in backend to dynamically construct w.r.t uploaded documents and context)
 
 ```
 You are the Buyer agent for Meridian Logistics. Your goal is to procure
@@ -422,10 +422,6 @@ The `termination_check` conditional edge evaluates the following conditions **in
 
 | Limitation | Detail |
 |---|---|
-| Turns render near-simultaneously | The backend streams SSE events, but graph nodes complete quickly; the UI receives turns in a burst. A per-turn artificial delay on the frontend would improve perceived streaming. |
-| Adversarial false claims (S4) | Agents passively ignore unsupported claims rather than actively flagging them. The citation validator catches uncited assertions; it does not cross-check the truthfulness of cited content. |
-| No SSE reconnect | If the SSE connection drops mid-negotiation, the frontend does not attempt reconnection. Exponential-backoff retry logic would be a production requirement. |
-| Citation modal depth | The `CitationModal` shows `source + section` only. It does not fetch the actual chunk text from OpenSearch. A `/chunks/{chunk_id}` endpoint would enable full-text preview. |
 | No persistent embedding cache | Embedding deduplication is done via `chunk_id` lookup in OpenSearch. If the index is wiped, all documents must be re-ingested and re-embedded. |
 | WALK_AWAY payload fallback | Claude Haiku occasionally returns `payload: null` on terminal messages. Both agents fall back to `current_terms` or a safe default when payload fields are `None` (fixed in `buyer_agent.py` and `seller_agent.py`). |
 
