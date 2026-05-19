@@ -15,13 +15,15 @@ from models.deal_state import NegotiationState
 from ingestion.loader import load_document
 from ingestion.chunker import chunk_documents
 from ingestion.embedder import embed_texts
-from ingestion.opensearch_store import upsert_chunks
+from ingestion.opensearch_store import upsert_chunks, fetch_citation_snippet, get_client, INDEX_NAME, create_index_if_not_exists
 
 router = APIRouter()
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # { session_id: { "state": NegotiationState, "events": list[dict], "done": bool, "summary": dict } }
 _sessions: dict[str, dict] = {}
+_staged_files: list[dict] = [] 
+
 
 VALID_TAGS = {"buyer-private", "seller-private", "shared"}
 
@@ -40,9 +42,9 @@ async def upload_document(
     file: UploadFile = File(...),
     tag: str = Form(...),
 ):
+    global _staged_files
     if tag not in VALID_TAGS:
         raise HTTPException(400, f"Invalid tag '{tag}'. Must be one of: {', '.join(VALID_TAGS)}")
-
     suffix = Path(file.filename).suffix.lower()
     content = await file.read()
 
@@ -63,6 +65,7 @@ async def upload_document(
 
     embeddings = embed_texts([c.page_content for c in chunks])
     upsert_chunks(chunks, embeddings)
+    _staged_files.append({"filename": file.filename, "tag": tag})
 
     return UploadResponse(
         doc_id=str(uuid.uuid4()),
@@ -78,10 +81,11 @@ class NegotiateResponse(BaseModel):
     session_id: str
 
 
+
 @router.post("/negotiate", response_model=NegotiateResponse)
 async def start_negotiation():
+    global _staged_files
     session_id = str(uuid.uuid4())
-
     initial_state: NegotiationState = {
         "session_id":           session_id,
         "messages":             [],
@@ -92,6 +96,7 @@ async def start_negotiation():
         "citation_retry":       False,
         "citation_retry_count": 0,
         "citation_error":       None,
+        "uploaded_files": list(_staged_files)
     }
 
     _sessions[session_id] = {
@@ -100,6 +105,7 @@ async def start_negotiation():
         "done":    False,
         "summary": None,
     }
+    _staged_files = []
 
     asyncio.create_task(_run_negotiation_task(session_id, initial_state))
 
@@ -111,47 +117,50 @@ async def _run_negotiation_task(session_id: str, initial_state: NegotiationState
     graph = build_graph()
     start = time.time()
 
-    try:
-        for state_snapshot in graph.stream(initial_state, stream_mode="values"):
-            msgs = state_snapshot.get("messages", [])
-            if not msgs:
-                continue
+    def run_graph():
+        try:
+            for state_snapshot in graph.stream(initial_state, stream_mode="values"):
+                msgs = state_snapshot.get("messages", [])
+                if not msgs:
+                    continue
 
-            last_msg = msgs[-1]
-            already_sent = sum(1 for e in session["events"] if e.get("type") == "turn")
-            if last_msg.turn <= already_sent:
-                continue
+                last_msg = msgs[-1]
+                already_sent = sum(1 for e in session["events"] if e.get("type") == "turn")
+                if last_msg.turn <= already_sent:
+                    continue
 
-            session["state"] = state_snapshot
+                session["state"] = state_snapshot
+                session["events"].append({
+                    "type":          "turn",
+                    "turn":          last_msg.turn,
+                    "agent_id":      last_msg.agent_id,
+                    "msg_type":      last_msg.msg_type.value,
+                    "payload":       last_msg.payload.model_dump(),
+                    "rationale":     last_msg.rationale,
+                    "citations":     [c.model_dump() for c in last_msg.citations],
+                    "input_tokens":  last_msg.input_tokens,
+                    "output_tokens": last_msg.output_tokens,
+                })
+
+            final_state = session["state"]
+            duration = time.time() - start
+            summary = build_summary(final_state, duration)
+            summary["session_id"] = session_id
+            session["summary"] = summary
+            session["events"].append({"type": "summary", **summary})
+
+        except Exception as e:
+            import traceback
             session["events"].append({
-                "type":          "turn",
-                "turn":          last_msg.turn,
-                "agent_id":      last_msg.agent_id,
-                "msg_type":      last_msg.msg_type.value,
-                "payload":       last_msg.payload.model_dump(),
-                "rationale":     last_msg.rationale,
-                "citations":     [c.model_dump() for c in last_msg.citations],
-                "input_tokens":  last_msg.input_tokens,
-                "output_tokens": last_msg.output_tokens,
+                "type":    "error",
+                "message": str(e),
+                "detail":  traceback.format_exc(),
             })
+        finally:
+            session["done"] = True
 
-        final_state = session["state"]
-        duration = time.time() - start
-        summary = build_summary(final_state, duration)
-        summary["session_id"] = session_id
-        session["summary"] = summary
-        session["events"].append({"type": "summary", **summary})
-
-    except Exception as e:
-        import traceback
-        session["events"].append({
-            "type":    "error",
-            "message": str(e),
-            "detail":  traceback.format_exc(),
-        })
-
-    finally:
-        session["done"] = True
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, run_graph)
 
 
 # ── GET /negotiate/{id}/stream ────────────────────────────────────────────────
@@ -220,3 +229,20 @@ async def get_summary(session_id: str):
         raise HTTPException(202, "Negotiation still in progress")
 
     return session["summary"]
+
+@router.get("/citation")
+async def get_citation_snippet(source: str, section: str = ""):
+    snippet = fetch_citation_snippet(source, section)
+    if not snippet:
+        raise HTTPException(404, "Citation snippet not found")
+    return {"source": source, "section": section, "snippet": snippet}
+
+@router.post("/reset")
+async def reset_session():
+    global _staged_files
+    client = get_client()
+    if client.indices.exists(index=INDEX_NAME):
+        client.indices.delete(index=INDEX_NAME)
+    create_index_if_not_exists()
+    _staged_files = []
+    return {"status": "ready"}
