@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-// import { BookOpen } from 'lucide-react';
+import { BookOpen, Globe  } from 'lucide-react';
 import CitationModal from './CitationModal';
 import '../styles/ChatBubble.css';
 
@@ -88,20 +88,19 @@ export default function ChatBubble({ turn }) {
 
         <p className="bubble-rationale">{parsedRationale}</p>
 
-        {/* {turn.citations?.length > 0 && (
+        {turn.citations?.some(c => c.source?.startsWith('http')) && (
           <div className="bubble-citations">
             <BookOpen size={11} />
-            {turn.citations.map((c, i) => (
-              <button
-                key={i}
-                className="citation-chip"
-                onClick={() => setActiveCitation(c)}
-              >
-                {c.source?.startsWith('http') ? 'Web' : c.source?.split('/').pop() || `ref ${i+1}`}
-              </button>
-            ))}
+            {turn.citations.map((c, i) => {
+              if (!c.source?.startsWith('http')) return null;
+              return (
+                <button key={i} className="citation-chip citation-chip-web" onClick={() => setActiveCitation(c)}>
+                  <Globe size={10} /> Web source
+                </button>
+              );
+            })}
           </div>
-        )} */}
+        )}
       </div>
 
       {activeCitation && (
