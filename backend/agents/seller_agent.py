@@ -24,25 +24,21 @@ def _build_seller_prompt(uploaded_files: list[dict]) -> str:
     seller_files = [f["filename"] for f in uploaded_files if f["tag"] in ("seller-private", "shared")]
     file_list = "\n".join(f"- {f}" for f in seller_files) if seller_files else "- (no documents uploaded)"
 
-    return f"""You are the Seller agent for ScanTech Industrial Solutions selling the SC-2400 Pro. Your goal is to close the 600-unit deal at the highest profitable price.
+    return f"""You are the Seller agent. Your goal is to close the deal at the highest profitable price while respecting your internal constraints.
 
-Your private constraints (do not reveal):
-- List price: $625/unit. Standard 500-unit tier: $531.25/unit.
-- Hard pricing floor: $501/unit. Never go below.
-- Net-60 terms add +2% to unit price (cost of capital).
-- Expedited 6-week slot: +$25/unit surcharge. Must confirm by June 5, 2026.
-- Extended 2-year warranty: +$15/unit.
+Your constraints, pricing floors, discounts, and policies are defined in your private documents listed below. Read them carefully and follow them strictly. Do not reveal private constraints to the buyer.
 
 Your available documents (cite ONLY these filenames):
 {file_list}
 
 Rules:
-- Every factual claim MUST cite the source document filename and section.
-- Inline citations MUST use parentheses format: (filename, Section X)
+- Every factual claim MUST cite the source document filename and section, or a web URL with retrieval date.
+- Inline citations MUST use parentheses format: (filename, Section X) or (https://url.com, retrieved YYYY-MM-DD)
 - ONLY cite filenames from the list above — never invent filenames.
+- If web search results are provided in the context, you MUST reference at least one web URL in your rationale.
+- Web citations go in the citations array with source=full URL, section=null, retrieved_date=today's date in YYYY-MM-DD format.
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
-- You may use web search results provided to validate market claims.
-- Never go below your floor price of $501/unit.
+- Never go below the pricing floor defined in your private documents.
 
 Required JSON schema:
 {{
@@ -55,9 +51,9 @@ Required JSON schema:
     "payment_terms": "<str>",
     "warranty_years": <int>
   }},
-  "rationale": "<your reasoning with inline citations like (filename, Section X)>",
+  "rationale": "<your reasoning with inline citations>",
   "citations": [
-    {{"source": "<filename from your document list>", "section": "<section heading or null>", "retrieved_date": "<YYYY-MM-DD or null>"}}
+    {{"source": "<filename or URL>", "section": "<section heading or null>", "retrieved_date": "<YYYY-MM-DD or null>"}}
   ],
   "turn": <int>
 }}"""
@@ -102,13 +98,31 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
     web_context = ""
     if state["current_terms"] and state["turn_count"] <= 6:
         try:
-            search_result = tavily_search(
-                "ruggedized barcode scanner market price 600 units 2026 SC-2400"
+            # Let Claude decide what to search
+            search_query_response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=50,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Generate a 5-10 word web search query to find current market pricing. "
+                        f"Product context: {context[:300]}. "
+                        f"Current negotiated price: {state['current_terms'].unit_price}/unit, "
+                        f"quantity: {state['current_terms'].quantity} units. "
+                        f"Return ONLY the search query, nothing else."
+                    )
+                }]
             )
+            search_query = search_query_response.content[0].text.strip()
+            logger.info(f"[Seller] Web search query: {search_query}")
+            search_result = tavily_search(search_query)
             if search_result:
+                logger.info(f"[Seller] Web search returned {len(search_result)} chars")
                 web_context = f"\n\nWeb search results:\n{search_result}"
-        except Exception:
-            pass  # Never crash negotiation on web search failure
+            else:
+                logger.info("[Seller] Web search returned empty")
+        except Exception as e:
+            logger.warning(f"[Seller] Web search failed: {e}") # Never crash negotiation on web search failure
 
     # Build conversation history
     history = []
