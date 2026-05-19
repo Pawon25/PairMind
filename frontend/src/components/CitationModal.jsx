@@ -22,7 +22,7 @@ export default function CitationModal({ citation, onClose }) {
     const params = new URLSearchParams({ source: citation.source });
     if (citation.section) params.append('section', citation.section);
 
-    fetch(`http://localhost:8000/citation?${params}`)
+    fetch(`${process.env.REACT_APP_API_URL}/citation?${params}`)
       .then((r) => r.ok ? r.json() : Promise.reject())
       .then((d) => setSnippet(d.snippet))
       .catch(() => setError('Snippet not found'))
