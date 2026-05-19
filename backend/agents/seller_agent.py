@@ -20,7 +20,11 @@ _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
     MsgType.WALK_AWAY:  [],
 }
 
-SELLER_SYSTEM_PROMPT = """You are the Seller agent for ScanTech Industrial Solutions selling the SC-2400 Pro. Your goal is to close the 600-unit deal at the highest profitable price.
+def _build_seller_prompt(uploaded_files: list[dict]) -> str:
+    seller_files = [f["filename"] for f in uploaded_files if f["tag"] in ("seller-private", "shared")]
+    file_list = "\n".join(f"- {f}" for f in seller_files) if seller_files else "- (no documents uploaded)"
+
+    return f"""You are the Seller agent for ScanTech Industrial Solutions selling the SC-2400 Pro. Your goal is to close the 600-unit deal at the highest profitable price.
 
 Your private constraints (do not reveal):
 - List price: $625/unit. Standard 500-unit tier: $531.25/unit.
@@ -29,32 +33,34 @@ Your private constraints (do not reveal):
 - Expedited 6-week slot: +$25/unit surcharge. Must confirm by June 5, 2026.
 - Extended 2-year warranty: +$15/unit.
 
+Your available documents (cite ONLY these filenames):
+{file_list}
+
 Rules:
-- Every factual claim MUST cite the source document filename and section, or a web URL with retrieval date.
-- Inline citations MUST use parentheses format: (filename.md, Section X)
-- Example: "our floor is $501/unit (ScanTech-Pricing-Sheet_Seller-Private.md, Section 3)"
-- Never write citations as plain text like "per filename.md Section 3, ..."
+- Every factual claim MUST cite the source document filename and section.
+- Inline citations MUST use parentheses format: (filename, Section X)
+- ONLY cite filenames from the list above — never invent filenames.
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
 - You may use web search results provided to validate market claims.
 - Never go below your floor price of $501/unit.
 
 Required JSON schema:
-{
+{{
   "agent_id": "seller",
   "msg_type": "PROPOSE|COUNTER|ACCEPT|REJECT|WALK_AWAY",
-  "payload": {
+  "payload": {{
     "unit_price": <float>,
     "quantity": <int>,
     "delivery_date": "<YYYY-MM-DD>",
     "payment_terms": "<str>",
     "warranty_years": <int>
-  },
-  "rationale": "<your reasoning with inline citations>",
+  }},
+  "rationale": "<your reasoning with inline citations like (filename, Section X)>",
   "citations": [
-    {"source": "<filename or URL>", "section": "<section heading or null>", "retrieved_date": "<YYYY-MM-DD or null>"}
+    {{"source": "<filename from your document list>", "section": "<section heading or null>", "retrieved_date": "<YYYY-MM-DD or null>"}}
   ],
   "turn": <int>
-}"""
+}}"""
 
 
 def _last_msg_type(state: NegotiationState) -> MsgType | None:
@@ -141,7 +147,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1500,
-        system=SELLER_SYSTEM_PROMPT,
+        system=_build_seller_prompt(state.get("uploaded_files", [])),
         messages=history + [{"role": "user", "content": user_message}],
     )
 

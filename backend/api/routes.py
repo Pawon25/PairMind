@@ -15,13 +15,15 @@ from models.deal_state import NegotiationState
 from ingestion.loader import load_document
 from ingestion.chunker import chunk_documents
 from ingestion.embedder import embed_texts
-from ingestion.opensearch_store import upsert_chunks
+from ingestion.opensearch_store import upsert_chunks, fetch_citation_snippet, get_client, INDEX_NAME, create_index_if_not_exists
 
 router = APIRouter()
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # { session_id: { "state": NegotiationState, "events": list[dict], "done": bool, "summary": dict } }
 _sessions: dict[str, dict] = {}
+_staged_files: list[dict] = [] 
+
 
 VALID_TAGS = {"buyer-private", "seller-private", "shared"}
 
@@ -40,9 +42,9 @@ async def upload_document(
     file: UploadFile = File(...),
     tag: str = Form(...),
 ):
+    global _staged_files
     if tag not in VALID_TAGS:
         raise HTTPException(400, f"Invalid tag '{tag}'. Must be one of: {', '.join(VALID_TAGS)}")
-
     suffix = Path(file.filename).suffix.lower()
     content = await file.read()
 
@@ -63,6 +65,7 @@ async def upload_document(
 
     embeddings = embed_texts([c.page_content for c in chunks])
     upsert_chunks(chunks, embeddings)
+    _staged_files.append({"filename": file.filename, "tag": tag})
 
     return UploadResponse(
         doc_id=str(uuid.uuid4()),
@@ -78,10 +81,11 @@ class NegotiateResponse(BaseModel):
     session_id: str
 
 
+
 @router.post("/negotiate", response_model=NegotiateResponse)
 async def start_negotiation():
+    global _staged_files
     session_id = str(uuid.uuid4())
-
     initial_state: NegotiationState = {
         "session_id":           session_id,
         "messages":             [],
@@ -92,6 +96,7 @@ async def start_negotiation():
         "citation_retry":       False,
         "citation_retry_count": 0,
         "citation_error":       None,
+        "uploaded_files": list(_staged_files)
     }
 
     _sessions[session_id] = {
@@ -100,6 +105,7 @@ async def start_negotiation():
         "done":    False,
         "summary": None,
     }
+    _staged_files = []
 
     asyncio.create_task(_run_negotiation_task(session_id, initial_state))
 
@@ -223,3 +229,20 @@ async def get_summary(session_id: str):
         raise HTTPException(202, "Negotiation still in progress")
 
     return session["summary"]
+
+@router.get("/citation")
+async def get_citation_snippet(source: str, section: str = ""):
+    snippet = fetch_citation_snippet(source, section)
+    if not snippet:
+        raise HTTPException(404, "Citation snippet not found")
+    return {"source": source, "section": section, "snippet": snippet}
+
+@router.post("/reset")
+async def reset_session():
+    global _staged_files
+    client = get_client()
+    if client.indices.exists(index=INDEX_NAME):
+        client.indices.delete(index=INDEX_NAME)
+    create_index_if_not_exists()
+    _staged_files = []
+    return {"status": "ready"}
