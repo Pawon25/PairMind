@@ -96,6 +96,7 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
 
     # Web search — only in early turns and only when buyer has proposed terms
     web_context = ""
+    web_citations = []
     if state["current_terms"] and state["turn_count"] <= 6:
         try:
             # Let Claude decide what to search
@@ -115,7 +116,7 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
             )
             search_query = search_query_response.content[0].text.strip()
             logger.info(f"[Seller] Web search query: {search_query}")
-            search_result = tavily_search(search_query)
+            search_result, web_citations = tavily_search(search_query)
             if search_result:
                 logger.info(f"[Seller] Web search returned {len(search_result)} chars")
                 web_context = f"\n\nWeb search results:\n{search_result}"
@@ -194,13 +195,20 @@ Return your response as valid JSON only — no markdown, no extra text."""
             data["msg_type"] = MsgType.COUNTER.value
         elif MsgType.PROPOSE in allowed:
             data["msg_type"] = MsgType.PROPOSE.value
+    
+    doc_citations = [Citation(**c) for c in data.get("citations", [])]
+    extra_web = [
+        Citation(source=w["url"], section=None, retrieved_date=w["retrieved_date"])
+        for w in web_citations
+        if not any(c.source == w["url"] for c in doc_citations)
+    ]
 
     envelope = MessageEnvelope(
         agent_id="seller",
         msg_type=MsgType(data["msg_type"]),
         payload=DealTerms(**data["payload"]),
         rationale=data.get("rationale", ""),
-        citations=[Citation(**c) for c in data.get("citations", [])],
+        citations=doc_citations + extra_web,
         turn=turn,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
