@@ -18,6 +18,9 @@ export default function UploadPanel({ onStart }) {
   const inputRef = useRef();
 
   const addFiles = async (incoming) => {
+    if (files.length === 0) {
+    await fetch('http://localhost:8000/reset', { method: 'POST' });
+  }
     const newEntries = Array.from(incoming).map((f) => ({
       file: f,
       tag: activeTag,

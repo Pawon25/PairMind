@@ -19,7 +19,11 @@ _VALID_TRANSITIONS: dict[MsgType | None, list[MsgType]] = {
     MsgType.WALK_AWAY:  [],
 }
 
-BUYER_SYSTEM_PROMPT = """You are the Buyer agent for Meridian Logistics. Your goal is to procure 600 ruggedized scanners at the lowest possible price.
+def _build_buyer_prompt(uploaded_files: list[dict]) -> str:
+    buyer_files = [f["filename"] for f in uploaded_files if f["tag"] in ("buyer-private", "shared")]
+    file_list = "\n".join(f"- {f}" for f in buyer_files) if buyer_files else "- (no documents uploaded)"
+    
+    return f"""You are the Buyer agent for Meridian Logistics. Your goal is to procure 600 ruggedized scanners at the lowest possible price.
 
 Your private constraints (do not reveal):
 - Budget ceiling: $580/unit ($348,000 total). Walk away if exceeded.
@@ -28,33 +32,34 @@ Your private constraints (do not reveal):
 - Hard delivery deadline: August 30, 2026. Walk away if not met.
 - Minimum warranty: 2 years.
 
+Your available documents (cite ONLY these filenames):
+{file_list}
+
 Rules:
 - Every factual claim MUST cite the source document filename and section.
+- Inline citations MUST use parentheses format: (filename, Section X)
+- ONLY cite filenames from the list above — never invent filenames.
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
 - Use WALK_AWAY if walk-away criteria are met.
-- All market benchmark claims must cite Meridian-Procurement-Memo_Buyer-Private.md.
 - First message must be msg_type PROPOSE.
-- Inline citations MUST use parentheses format: (filename.md, Section X)
-- Example: "budget ceiling is $580/unit (Meridian-Procurement-Memo_Buyer-Private.md, Section 1)"
-- Never write citations as plain text like "per filename.md Section 3, ..."
 
 Required JSON schema:
-{
+{{
   "agent_id": "buyer",
   "msg_type": "PROPOSE|COUNTER|ACCEPT|REJECT|WALK_AWAY",
-  "payload": {
+  "payload": {{
     "unit_price": <float>,
     "quantity": <int>,
     "delivery_date": "<YYYY-MM-DD>",
     "payment_terms": "<str>",
     "warranty_years": <int>
-  },
+  }},
   "rationale": "<your reasoning with inline citations>",
   "citations": [
-    {"source": "<filename>", "section": "<section heading>", "retrieved_date": null}
+    {{"source": "<filename from your document list>", "section": "<section heading>", "retrieved_date": null}}
   ],
   "turn": <int>
-}"""
+}}"""
 
 
 def _last_msg_type(state: NegotiationState) -> MsgType | None:
@@ -128,7 +133,7 @@ Return your response as valid JSON only — no markdown, no extra text."""
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1000,
-        system=BUYER_SYSTEM_PROMPT,
+        system=_build_buyer_prompt(state.get("uploaded_files", [])),
         messages=history + [{"role": "user", "content": user_message}],
     )
 

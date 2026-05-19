@@ -1,13 +1,33 @@
-import React, { useEffect } from 'react';
-import { X, FileText, Globe } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, FileText, Globe, Loader2 } from 'lucide-react';
 import '../styles/CitationModal.css';
 
 export default function CitationModal({ citation, onClose }) {
+  const [snippet, setSnippet]   = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
+
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!citation || citation.source?.startsWith('http')) return;
+    setLoading(true);
+    setSnippet(null);
+    setError(null);
+
+    const params = new URLSearchParams({ source: citation.source });
+    if (citation.section) params.append('section', citation.section);
+
+    fetch(`http://localhost:8000/citation?${params}`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((d) => setSnippet(d.snippet))
+      .catch(() => setError('Snippet not found'))
+      .finally(() => setLoading(false));
+  }, [citation]);
 
   if (!citation) return null;
 
@@ -44,6 +64,21 @@ export default function CitationModal({ citation, onClose }) {
               <span className="modal-value">{citation.retrieved_date}</span>
             </div>
           )}
+
+          {/* Snippet */}
+          {!isWeb && (
+            <div className="modal-field">
+              <span className="modal-field-label">Excerpt</span>
+              {loading && (
+                <div className="modal-loading">
+                  <Loader2 size={13} className="spin" /> Loading excerpt…
+                </div>
+              )}
+              {error   && <span className="modal-error">{error}</span>}
+              {snippet && <p className="modal-snippet">{snippet}</p>}
+            </div>
+          )}
+
           {isWeb && (
             <div className="modal-unverified">
               ⚠ Web citation — content not verified
