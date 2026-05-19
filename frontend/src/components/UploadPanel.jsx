@@ -19,7 +19,7 @@ export default function UploadPanel({ onStart }) {
 
   const addFiles = async (incoming) => {
     if (files.length === 0) {
-    await fetch('http://localhost:8000/reset', { method: 'POST' });
+    await fetch(`${process.env.REACT_APP_API_URL}/reset`, { method: 'POST' });
   }
     const newEntries = Array.from(incoming).map((f) => ({
       file: f,
@@ -27,7 +27,7 @@ export default function UploadPanel({ onStart }) {
       id: null,
       uploading: true,
       error: null,
-      localId: crypto.randomUUID(),
+      localId: Math.random().toString(36).slice(2),
     }));
 
     setFiles((prev) => [...prev, ...newEntries]);
