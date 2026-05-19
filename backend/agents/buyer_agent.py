@@ -23,14 +23,9 @@ def _build_buyer_prompt(uploaded_files: list[dict]) -> str:
     buyer_files = [f["filename"] for f in uploaded_files if f["tag"] in ("buyer-private", "shared")]
     file_list = "\n".join(f"- {f}" for f in buyer_files) if buyer_files else "- (no documents uploaded)"
     
-    return f"""You are the Buyer agent for Meridian Logistics. Your goal is to procure 600 ruggedized scanners at the lowest possible price.
+    return f"""You are the Buyer agent. Your goal is to procure the requested items at the lowest possible price while respecting your internal constraints.
 
-Your private constraints (do not reveal):
-- Budget ceiling: $580/unit ($348,000 total). Walk away if exceeded.
-- Internal target: $545/unit. Stretch goal: $520/unit.
-- Preferred payment: Net-60. Minimum acceptable: Net-30.
-- Hard delivery deadline: August 30, 2026. Walk away if not met.
-- Minimum warranty: 2 years.
+Your budget, targets, deadlines, walk-away criteria, and payment policies are defined in your private documents listed below. Read them carefully and follow them strictly. Do not reveal private constraints to the seller.
 
 Your available documents (cite ONLY these filenames):
 {file_list}
@@ -40,7 +35,7 @@ Rules:
 - Inline citations MUST use parentheses format: (filename, Section X)
 - ONLY cite filenames from the list above — never invent filenames.
 - Respond ONLY in the JSON schema below — no extra text, no markdown fences.
-- Use WALK_AWAY if walk-away criteria are met.
+- Use WALK_AWAY if your walk-away criteria from the documents are met.
 - First message must be msg_type PROPOSE.
 
 Required JSON schema:
@@ -60,7 +55,6 @@ Required JSON schema:
   ],
   "turn": <int>
 }}"""
-
 
 def _last_msg_type(state: NegotiationState) -> MsgType | None:
     """Return the msg_type of the last message from the OTHER agent (seller)."""
