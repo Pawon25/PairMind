@@ -20,7 +20,7 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 
 ## 1. Quick Start — Setup Instructions
 
-> **Live demo:** **http://43.205.210.113**
+> **Live demo:** **http://<EC2_PUBLIC_IP>**
 >
 > **Infrastructure layout:** Single EC2 instance — no Docker.
 >
@@ -46,7 +46,7 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 
 ```bash
 # SSH in
-ssh -i "your-key.pem" ubuntu@43.205.210.113
+ssh -i "your-key.pem" ubuntu@<EC2_PUBLIC_IP>
 
 # Expand disk (after resizing volume to 20 GB in AWS Console)
 sudo growpart /dev/nvme0n1 1
@@ -61,14 +61,48 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Install system dependencies
 sudo apt update
-sudo apt install -y nginx
+sudo apt install -y nginx python3-venv python3-pip
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
 ---
 
-### 1.2 Backend
+### 1.2 OpenSearch
+
+Runs on the same box, bound to `localhost` only (never exposed in the security group). The backend client (`opensearch_store.py`) connects with **no auth**, so the security plugin must be disabled — the apt package installs it enabled by default, so that gets flipped off right after install.
+
+```bash
+sudo apt install -y openjdk-21-jdk
+
+curl -o- https://artifacts.opensearch.org/publickeys/opensearch.pgp | sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/opensearch-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/opensearch-keyring.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/apt stable main" | sudo tee /etc/apt/sources.list.d/opensearch-2.x.list
+sudo apt update
+
+# The admin password below only matters during install (security plugin is
+# on by default at this point) — it stops mattering once security is disabled.
+sudo OPENSEARCH_INITIAL_ADMIN_PASSWORD="$(openssl rand -base64 16)" apt install -y opensearch
+
+# Disable the security plugin and bind to localhost only
+echo "plugins.security.disabled: true" | sudo tee -a /etc/opensearch/opensearch.yml
+echo "network.host: 127.0.0.1"        | sudo tee -a /etc/opensearch/opensearch.yml
+echo "discovery.type: single-node"     | sudo tee -a /etc/opensearch/opensearch.yml
+
+# t3.small — keep JVM heap modest
+sudo sed -i 's/-Xms1g/-Xms512m/' /etc/opensearch/jvm.options
+sudo sed -i 's/-Xmx1g/-Xmx512m/' /etc/opensearch/jvm.options
+
+sudo systemctl daemon-reload
+sudo systemctl enable opensearch
+sudo systemctl start opensearch
+
+# Verify (no credentials needed — security plugin is off)
+curl http://localhost:9200/_cluster/health
+```
+
+---
+
+### 1.3 Backend
 
 ```bash
 # Clone repo
@@ -79,13 +113,10 @@ cd ~/PairMind/backend
 python3 -m venv venv
 source venv/bin/activate
 
-# Install dependencies (torch CPU-only to save disk space)
-pip install fastapi "uvicorn==0.24.0" pydantic python-multipart python-dotenv \
-            langgraph langchain langchain-community langchain-openai \
-            langchain-text-splitters anthropic tavily-python \
-            "opensearch-py==2.4.2" pypdf docx2txt markdown unstructured
+# Install dependencies (torch CPU-only first, to save disk space —
+# sentence-transformers would otherwise pull the default GPU build)
 pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-pip install --no-cache-dir sentence-transformers
+pip install -r requirements.txt
 
 # Configure environment
 nano .env
@@ -127,7 +158,7 @@ curl http://localhost:8000/health   # → {"status":"ok"}
 
 ---
 
-### 1.3 Landing (gate page)
+### 1.4 Landing (gate page)
 
 `landing/` is the public-facing landing/token-gate page — visitors land here first, and once past the gate they're sent into the real app at `/app`. It's a TanStack Start (SSR) app, so — unlike `frontend/` — it needs a running Node process, not just a static file drop.
 
@@ -170,13 +201,13 @@ curl http://localhost:3001/
 
 ---
 
-### 1.4 Frontend
+### 1.5 Frontend
 
 ```bash
 cd ~/PairMind/frontend
 
 # Set API base URL (Nginx proxies /api/ → FastAPI)
-echo "REACT_APP_API_URL=http://43.205.210.113/api" > .env
+echo "REACT_APP_API_URL=http://<EC2_PUBLIC_IP>/api" > .env
 
 npm install
 npm run build   # outputs to frontend/build/, base path is /app (see "homepage" in package.json)
@@ -184,7 +215,7 @@ npm run build   # outputs to frontend/build/, base path is /app (see "homepage" 
 
 ---
 
-### 1.5 Nginx
+### 1.6 Nginx
 
 ```bash
 sudo nano /etc/nginx/sites-available/pairmind
@@ -195,7 +226,7 @@ Paste:
 ```nginx
 server {
     listen 80;
-    server_name 43.205.210.113;
+    server_name <EC2_PUBLIC_IP>;
 
     # / — landing/gate page (SSR, proxied to the Node process)
     location / {
@@ -238,11 +269,11 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-Open **http://43.205.210.113** in your browser — lands on the gate page; a verified token takes you into `/app`.
+Open **http://<EC2_PUBLIC_IP>** in your browser — lands on the gate page; a verified token takes you into `/app`.
 
 ---
 
-### 1.6 Redeploy after code changes
+### 1.7 Redeploy after code changes
 
 ```bash
 cd ~/PairMind
