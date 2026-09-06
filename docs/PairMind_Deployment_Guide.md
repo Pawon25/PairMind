@@ -1,215 +1,112 @@
-# PairMind — Complete Deployment Guide
-**Stack:** FastAPI + LangGraph + React + OpenSearch + Claude Haiku  
-**Deployment:** AWS EC2 (no Docker) — Nginx + Uvicorn on a single instance  
-**Date:** May 2026
+# PairMind — Deployment Guide
 
-> **Snapshot, not source of truth.** This predates the `landing/` gate page
-> being folded into the repo. For the current three-service layout
-> (`landing/` at `/`, `frontend/` at `/app`, FastAPI at `/api`), see the
-> README's Quick Start section instead — this file is kept for the original
-> two-service (frontend + backend) setup detail.
+Complete, copy-pasteable steps for standing up PairMind on a single EC2 instance: OpenSearch, the FastAPI backend, the `landing/` gate page, the `frontend/` negotiation UI, Nginx, HTTPS, and the access-token system. For architecture, design rationale, and local development, see the main [README](../README.md) — this file is pure ops.
+
+**Reference instance:** Ubuntu 26.04, t3.small, 20 GB gp3, ap-south-1 (Mumbai), domain `pairmind.pavanb.in`. Substitute your own instance/domain throughout.
 
 ---
 
-## EC2 Specifications
+## Infrastructure layout
 
-| Item | Value |
-|------|-------|
-| Instance type | t3.small |
-| OS | Ubuntu 26.04 (Resolute) |
-| Region | ap-south-1 (Mumbai) |
-| Root volume | 20 GB gp3 (expanded from default 8 GB) |
-| Swap | 1 GB (added manually) |
-| RAM | 2 GB |
-| Public IP | 43.205.210.113 |
+| Service | Port | Exposed |
+|---|---|---|
+| Nginx (TLS via Let's Encrypt) | 80 → 443 | ✅ Public |
+| `landing/` (TanStack Start, SSR) | 3001 | 🔒 Internal only |
+| Backend (FastAPI) | 8000 | 🔒 Internal only |
+| OpenSearch | 9200 | 🔒 Internal only |
 
-### Security Group — Inbound Rules
-
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 22 | TCP | Your IP | SSH access |
-| 80 | TCP | 0.0.0.0/0 | HTTP (Nginx serves frontend + proxies API) |
-| 9200 | TCP | Your IP | OpenSearch (already configured) |
-
-> Port 8000 (FastAPI) is **not** opened to the internet — only Nginx talks to it internally.
+Nginx routes by path on one domain: `/` → `landing/` (proxied), `/app/*` → `frontend/` (static files), `/api/*` → FastAPI. Plain HTTP redirects to HTTPS once Certbot is set up (§6).
 
 ---
 
-## Architecture
+## 1. EC2 base setup
 
-```
-Internet
-    ↓
-Nginx (port 80)
-    ├── /          → serves React build (static files)
-    └── /api/      → proxies to FastAPI on localhost:8000
-                            ↓
-                    FastAPI (uvicorn, port 8000)
-                            ↓
-                    OpenSearch (port 9200, already running)
-```
+**Security group inbound rules:** `22` (SSH, ideally restricted to your IP), `80` and `443` (HTTP/HTTPS, public). Don't open `9200` — OpenSearch stays internal.
 
----
-
-## Step 1 — Expand EC2 Root Volume (AWS Console)
-
-The default 8 GB root volume fills up when installing Python ML packages (torch alone is ~1.4 GB).
-
-**In AWS Console:**
-1. EC2 → Elastic Block Store → **Volumes**
-2. Select the volume attached to your instance
-3. Actions → **Modify Volume** → change size to **20 GB** → confirm
-
-**Back in the EC2 terminal — grow the partition to use new space:**
 ```bash
-# Check device name
-lsblk
-# Should show nvme0n1 with a partition nvme0n1p1
+ssh -i "your-key.pem" ubuntu@<EC2_PUBLIC_IP>
 
-# Expand the partition
+# Expand disk (after resizing the volume in AWS Console, if you started smaller than 20 GB)
 sudo growpart /dev/nvme0n1 1
-
-# Resize the filesystem to fill the partition
 sudo resize2fs /dev/nvme0n1p1
 
-# Verify — should now show ~19 GB available
-df -h /
-```
-
----
-
-## Step 2 — Add Swap Space
-
-OpenSearch + FastAPI + sentence-transformers together exceed 2 GB RAM on a t3.small. Swap (virtual memory on disk) prevents OOM kills.
-
-```bash
-# Allocate a 1 GB swap file
+# Add 1 GB swap — prevents OOM kills on t3.small's 2 GB RAM
 sudo fallocate -l 1G /swapfile
-
-# Secure it — only root can read it
 sudo chmod 600 /swapfile
-
-# Format it as swap
 sudo mkswap /swapfile
-
-# Activate it
 sudo swapon /swapfile
-
-# Make it survive reboots
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
-# Verify — should show Swap: 1.0Gi
-free -h
-```
-
----
-
-## Step 3 — Install System Dependencies
-
-Ubuntu Resolute (26.04) ships with Python 3.14 — no need to install Python separately.
-
-```bash
-# Update package list
+# System dependencies
 sudo apt update
-
-# Install Nginx (web server) and Node.js tooling
-sudo apt install -y nginx
-
-# Install Node.js 20 (for building React frontend)
+sudo apt install -y git nginx python3-venv python3-pip
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
-
-# Verify
-nginx -v        # nginx/1.28.x
-node --version  # v20.x
-npm --version   # 10.x
-python3 --version  # Python 3.14.x
 ```
 
 ---
 
-## Step 4 — Clone the Repository
+## 2. OpenSearch
+
+Runs on the same box, bound to `localhost` only — never exposed in the security group. `backend/ingestion/opensearch_store.py` connects with **no auth**, so the security plugin must be disabled (the apt package ships with it enabled by default).
 
 ```bash
-cd ~
+sudo apt install -y openjdk-21-jdk
+
+curl -o- https://artifacts.opensearch.org/publickeys/opensearch.pgp | sudo gpg --dearmor --batch --yes -o /usr/share/keyrings/opensearch-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/opensearch-keyring.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/apt stable main" | sudo tee /etc/apt/sources.list.d/opensearch-2.x.list
+sudo apt update
+
+# The admin password below only matters during install (security plugin is
+# on by default at this point) — it stops mattering once security is disabled.
+sudo OPENSEARCH_INITIAL_ADMIN_PASSWORD="$(openssl rand -base64 16)" apt install -y opensearch
+
+echo "plugins.security.disabled: true" | sudo tee -a /etc/opensearch/opensearch.yml
+echo "network.host: 127.0.0.1"        | sudo tee -a /etc/opensearch/opensearch.yml
+echo "discovery.type: single-node"     | sudo tee -a /etc/opensearch/opensearch.yml
+
+# t3.small — keep JVM heap modest
+sudo sed -i 's/-Xms1g/-Xms512m/' /etc/opensearch/jvm.options
+sudo sed -i 's/-Xmx1g/-Xmx512m/' /etc/opensearch/jvm.options
+
+sudo systemctl daemon-reload
+sudo systemctl enable opensearch
+sudo systemctl start opensearch
+
+curl http://localhost:9200/_cluster/health   # no credentials needed — security plugin is off
+```
+
+---
+
+## 3. Backend
+
+```bash
 git clone https://github.com/Pawon25/PairMind.git
-
-# Verify
-ls  # should show: PairMind
-```
-
----
-
-## Step 5 — Set Up Python Backend
-
-### Create virtual environment
-```bash
 cd ~/PairMind/backend
 
-# Create isolated Python environment
 python3 -m venv venv
-
-# Activate it — prompt changes to (venv)
 source venv/bin/activate
-```
 
-> **What's a venv?** An isolated Python environment so project packages don't conflict with system Python.
-
-### Install dependencies (in two steps to manage disk space)
-
-**Step 5a — Install everything except torch:**
-```bash
-pip install fastapi "uvicorn==0.24.0" pydantic python-multipart python-dotenv \
-    langgraph langchain langchain-community langchain-openai langchain-text-splitters \
-    anthropic tavily-python "opensearch-py==2.4.2" pypdf docx2txt markdown unstructured
-```
-
-**Step 5b — Install CPU-only torch (much smaller than GPU version) without caching:**
-```bash
-# --no-cache-dir saves ~400 MB of disk (we don't need to reinstall later)
+# CPU-only torch first — sentence-transformers would otherwise pull the
+# default GPU build, which is much larger
 pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+nano .env
 ```
 
-**Step 5c — Install sentence-transformers:**
-```bash
-pip install --no-cache-dir sentence-transformers
+Add to `.env`:
 ```
-
-> **Why separate steps?** The full torch GPU wheel is 532 MB and would fill the disk. CPU-only is 192 MB. Installing without cache prevents pip from keeping a copy after install.
-
-### Create the .env file
-```bash
-nano ~/PairMind/backend/.env
-```
-
-Paste and fill in your actual keys:
-```
-ANTHROPIC_API_KEY=your_key_here
-TAVILY_API_KEY=your_key_here
+ANTHROPIC_API_KEY=<your_key>
+TAVILY_API_KEY=<your_key>
 OPENSEARCH_URL=http://localhost:9200
 ```
-Save: `Ctrl+X` → `Y` → `Enter`
 
-### Test backend starts correctly
-```bash
-cd ~/PairMind/backend
-source venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000
-# Should see: Application startup complete.
-# Ctrl+C to stop
-```
-
----
-
-## Step 6 — Register Backend as a systemd Service
-
-> **Why systemd?** So the backend auto-starts on reboot and restarts if it crashes — same as OpenSearch.
+Register as a systemd service:
 
 ```bash
 sudo nano /etc/systemd/system/pairmind-backend.service
 ```
-
-Paste exactly:
 ```ini
 [Unit]
 Description=PairMind Backend
@@ -225,191 +122,159 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 ```
-
-Save, then enable and start:
 ```bash
-# Reload systemd so it sees the new service file
 sudo systemctl daemon-reload
-
-# Enable = auto-start on reboot
 sudo systemctl enable pairmind-backend
-
-# Start it now
 sudo systemctl start pairmind-backend
 
-# Check it's running
-sudo systemctl status pairmind-backend --no-pager
-# Should show: Active: active (running)
+curl http://localhost:8000/health   # → {"status":"ok"}
 ```
 
 ---
 
-## Step 7 — Build the React Frontend
+## 4. Landing (gate page)
 
-### Fix hardcoded localhost URLs
+`landing/` is a TanStack Start (SSR) app — unlike `frontend/`, it needs a running Node process, not just a static file drop.
 
-The frontend had two files with hardcoded `http://localhost:8000`. These must use the environment variable instead.
-
-**In `frontend/src/components/UploadPanel.jsx`:**
-```js
-// WRONG
-await fetch('http://localhost:8000/reset', { method: 'POST' });
-localId: crypto.randomUUID(),  // breaks without HTTPS
-
-// CORRECT
-await fetch(`${process.env.REACT_APP_API_URL}/reset`, { method: 'POST' });
-localId: Math.random().toString(36).slice(2),  // works over HTTP
-```
-
-**In `frontend/src/components/CitationModal.jsx`:**
-```js
-// WRONG
-fetch(`http://localhost:8000/citation?${params}`)
-
-// CORRECT
-fetch(`${process.env.REACT_APP_API_URL}/citation?${params}`)
-```
-
-> **Why backticks?** In JavaScript, `${variable}` only works inside backtick (`` ` ``) template literals — single or double quotes treat it as a plain string.
-
-> **Why replace crypto.randomUUID()?** It requires a secure context (HTTPS). Since we're on plain HTTP, we use `Math.random()` instead.
-
-### Set the API base URL
 ```bash
-echo "REACT_APP_API_URL=http://43.205.210.113/api" > ~/PairMind/frontend/.env
-```
+cd ~/PairMind/landing
+npm install
+npm run build   # outputs to landing/.output/
 
-### Fix the browser tab title
+sudo nano /etc/systemd/system/pairmind-landing.service
+```
+```ini
+[Unit]
+Description=PairMind Landing
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PairMind/landing
+Environment=PORT=3001
+ExecStart=/usr/bin/node /home/ubuntu/PairMind/landing/.output/server/index.mjs
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
 ```bash
-nano ~/PairMind/frontend/public/index.html
-# Change: <title>React App</title>
-# To:     <title>PairMind</title>
+sudo systemctl daemon-reload
+sudo systemctl enable pairmind-landing
+sudo systemctl start pairmind-landing
+
+curl http://localhost:3001/
 ```
 
-### Install and build
+---
+
+## 5. Frontend
+
 ```bash
 cd ~/PairMind/frontend
+echo "REACT_APP_API_URL=https://<your-domain>/api" > .env
 npm install
-npm run build
-# Creates frontend/build/ — static files ready to serve
+npm run build   # outputs to frontend/build/, base path is /app (see "homepage" in package.json)
 ```
 
 ---
 
-## Step 8 — Configure Nginx
+## 6. Nginx
 
 ```bash
 sudo nano /etc/nginx/sites-available/pairmind
 ```
-
-Paste:
 ```nginx
 server {
     listen 80;
-    server_name 43.205.210.113;
+    server_name <your-domain>;
 
-    # Serve React frontend static files
-    root /home/ubuntu/PairMind/frontend/build;
-    index index.html;
-
-    # All frontend routes (React Router support)
     location / {
-        try_files $uri $uri/ /index.html;
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
     }
 
-    # Proxy /api/* to FastAPI backend (strips /api prefix)
+    # Bare "/app" (no trailing slash) doesn't match the block below on its
+    # own — nginx prefix matching needs the slash — so without this it
+    # silently falls through to "/" instead of the frontend.
+    location = /app {
+        return 301 /app/;
+    }
+
+    location /app/ {
+        alias /home/ubuntu/PairMind/frontend/build/;
+        try_files $uri $uri/ /app/index.html;
+    }
+
     location /api/ {
         proxy_pass http://localhost:8000/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        # Required for SSE streaming
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 300s;
     }
 }
 ```
-
-Enable and activate:
 ```bash
-# Enable our config
 sudo ln -s /etc/nginx/sites-available/pairmind /etc/nginx/sites-enabled/
-
-# Disable the default placeholder page
 sudo rm /etc/nginx/sites-enabled/default
 
-# Test config syntax
+# Allow Nginx to traverse into /home/ubuntu to reach the frontend build
+sudo chmod o+x /home/ubuntu /home/ubuntu/PairMind /home/ubuntu/PairMind/frontend /home/ubuntu/PairMind/frontend/build
+
 sudo nginx -t
-# Should say: syntax is ok / test is successful
-
-# Apply
-sudo systemctl restart nginx
-```
-
-### Fix file permissions for Nginx
-
-Nginx runs as `www-data` user and can't read files in `/home/ubuntu/` by default.
-
-```bash
-# Give "others" (including www-data) permission to traverse each directory
-sudo chmod o+x /home/ubuntu
-sudo chmod o+x /home/ubuntu/PairMind
-sudo chmod o+x /home/ubuntu/PairMind/frontend
-sudo chmod o+x /home/ubuntu/PairMind/frontend/build
-
 sudo systemctl restart nginx
 ```
 
 ---
 
-## Step 9 — Verify Everything Works
+## 7. HTTPS (Let's Encrypt / Certbot)
+
+Point a DNS **A record** at the EC2's public IP, and open port **443** in the security group (Type: HTTPS, Source: Anywhere). Then:
 
 ```bash
-# OpenSearch healthy
-curl http://localhost:9200
-
-# Backend healthy
-curl http://localhost:8000/health
-# Should return: {"status":"ok"}
-
-# All services running
-sudo systemctl status opensearch --no-pager | grep Active
-sudo systemctl status pairmind-backend --no-pager | grep Active
-sudo systemctl status nginx --no-pager | grep Active
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d <your-domain>
 ```
 
-Open in browser: **http://43.205.210.113**
+Follow the prompts and say **yes** to the HTTP→HTTPS redirect offer — Certbot rewrites `/etc/nginx/sites-enabled/pairmind` in place to add the TLS block, and installs a `certbot.timer` systemd timer for auto-renewal (90-day cert validity). Verify with `systemctl list-timers | grep certbot`.
 
 ---
 
-## Useful Commands for Ongoing Management
+## 8. Access Tokens
+
+The demo is invite-only (see README for why). Day-to-day operator commands, run on the EC2 box:
 
 ```bash
-# View backend logs (live)
-sudo journalctl -u pairmind-backend -f
+cd ~/PairMind/backend
+source venv/bin/activate
 
-# Restart backend (after code changes)
-sudo systemctl restart pairmind-backend
+python manage_demo_requests.py list          # see pending demo requests
+python issue_token.py issue --note "jane@company.com"   # defaults: 7-day expiry, 3 uses
+python issue_token.py issue --note "jane@company.com" --expires-days 14 --uses 5  # override
+python manage_demo_requests.py review 1      # mark a request handled
+python issue_token.py list                   # see all issued tokens + their status
+```
 
-# Rebuild frontend and redeploy
-cd ~/PairMind/frontend && npm run build && sudo systemctl restart nginx
+---
 
-# Pull latest code from GitHub and redeploy
-cd ~/PairMind && git pull
-cd backend && source venv/bin/activate && pip install -r requirements.txt
-cd ../frontend && npm install && npm run build
-sudo systemctl restart pairmind-backend
+## 9. Redeploying after code changes
+
+```bash
+cd ~/PairMind
+git pull
+
+cd frontend && npm run build && cd ..
+cd landing && npm run build && cd ..
+sudo systemctl restart pairmind-landing
 sudo systemctl restart nginx
 
-# Check disk space
-df -h /
-
-# Check memory
-free -h
-
-# Check all service statuses
-sudo systemctl status opensearch pairmind-backend nginx --no-pager
+# If backend code changed:
+sudo systemctl restart pairmind-backend
 ```
 
 ---
@@ -417,10 +282,10 @@ sudo systemctl status opensearch pairmind-backend nginx --no-pager
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Disk quota exceeded` during pip install | Disk full | `pip cache purge`, check `df -h /` |
-| OpenSearch OOM killed | t3.small RAM exhausted | Ensure swap is active: `free -h` |
-| `Permission denied` in Nginx logs | www-data can't read /home/ubuntu | Run `chmod o+x` on each directory in path |
-| `${process.env...}` appears literally in URL | Single quotes used instead of backticks | Use backticks for JS template literals |
-| `crypto.randomUUID is not a function` | Requires HTTPS | Replace with `Math.random().toString(36).slice(2)` |
-| Backend not reachable at `/api/` | Nginx proxy not stripping prefix correctly | Ensure `proxy_pass http://localhost:8000/;` has trailing slash |
+|---|---|---|
+| Backend `Application startup failed`, OpenSearch `ConnectTimeoutError` | `OPENSEARCH_URL` wrong, or OpenSearch not running | `curl http://localhost:9200/_cluster/health`; check `.env` points at `localhost:9200` |
+| `curl http://localhost:8000/health` connection refused right after restart | Backend still loading the embedding model | Wait ~10–15s and retry — first load is slow, subsequent requests aren't |
+| `/app` (no trailing slash) 404s or shows the landing page | Nginx prefix matching needs the trailing slash | Confirm the `location = /app { return 301 /app/; }` block is present |
+| `pip install` fails with disk errors | t3.small's 8 GB default root volume is too small | Resize to 20 GB in AWS Console, then §1's `growpart`/`resize2fs` |
+| OpenSearch or backend OOM-killed | t3.small RAM (2 GB) exhausted | Confirm swap is active: `free -h` |
+| `Failed to establish a new connection` immediately after `git pull` on `landing/` | Wrong Node version — TanStack Start needs Node ≥22.12 | `curl -fsSL https://deb.nodesource.com/setup_22.x \| sudo -E bash -` then `sudo apt install -y nodejs`, then `rm -rf node_modules package-lock.json && npm install` |
