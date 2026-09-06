@@ -3,6 +3,12 @@
 **Deployment:** AWS EC2 (no Docker) — Nginx + Uvicorn on a single instance  
 **Date:** May 2026
 
+> **Snapshot, not source of truth.** This predates the `landing/` gate page
+> being folded into the repo. For the current three-service layout
+> (`landing/` at `/`, `frontend/` at `/app`, FastAPI at `/api`), see the
+> README's Quick Start section instead — this file is kept for the original
+> two-service (frontend + backend) setup detail.
+
 ---
 
 ## EC2 Specifications
