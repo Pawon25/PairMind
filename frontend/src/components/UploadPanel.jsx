@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, FileText, X, ArrowRight, AlertCircle } from 'lucide-react';
-import { uploadDocument, startNegotiation, resetSession, useSampleDocuments } from '../api/index';
+import { uploadDocument, startNegotiation, resetSession, fetchSampleDocuments } from '../api/index';
 import '../styles/UploadPanel.css';
 
 function makeSessionId() {
@@ -29,7 +29,7 @@ export default function UploadPanel({ onStart }) {
     setLoadingSample(true);
     try {
       await resetSession(sessionIdRef.current);
-      const results = await useSampleDocuments(sessionIdRef.current);
+      const results = await fetchSampleDocuments(sessionIdRef.current);
       setFiles(results.map((r) => ({
         file: { name: r.filename },
         tag: r.tag,
