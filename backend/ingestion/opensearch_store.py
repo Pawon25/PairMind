@@ -125,35 +125,19 @@ def delete_session_chunks(session_id: str):
 #     except Exception:
 #         return None
 
-def fetch_citation_snippet(filename: str, section: str) -> str | None:
+def fetch_citation_snippet(filename: str, section: str, session_id: str) -> str | None:
     client = get_client()
-
-    # Map section references to keywords likely in that section's text
-    section_keywords = {
-        "1": "budget ceiling",
-        "2": "market benchmark",
-        "3": "payment terms",
-        "4": "delivery",
-        "5": "walk-away",
-        "6": "fallback",
-    }
-
-    # Extract section number from strings like "Section 1", "Section 2. Market..."
-    import re
-    sec_num = None
-    match = re.search(r'section\s*(\d+)', section, re.IGNORECASE)
-    if match:
-        sec_num = match.group(1)
-
-    keyword = section_keywords.get(sec_num, section) if sec_num else section
 
     query = {
         "query": {
             "bool": {
-                "must": [{"term": {"filename": filename}}],
+                "must": [
+                    {"term": {"filename": filename}},
+                    {"term": {"session_id": session_id}},
+                ],
                 "should": [
-                    {"match_phrase": {"text": keyword}},
-                    {"match": {"text": keyword}},
+                    {"match_phrase": {"text": section}},
+                    {"match": {"text": section}},
                 ],
                 "minimum_should_match": 1
             }
