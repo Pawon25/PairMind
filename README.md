@@ -20,7 +20,7 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 
 ## 1. Quick Start — Setup Instructions
 
-> **Live demo:** **http://<EC2_PUBLIC_IP>**
+> **Live demo:** **http://65.2.127.167**
 >
 > **Infrastructure layout:** Single EC2 instance — no Docker.
 >
@@ -46,7 +46,7 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 
 ```bash
 # SSH in
-ssh -i "your-key.pem" ubuntu@<EC2_PUBLIC_IP>
+ssh -i "your-key.pem" ubuntu@65.2.127.167
 
 # Expand disk (after resizing volume to 20 GB in AWS Console)
 sudo growpart /dev/nvme0n1 1
@@ -207,7 +207,7 @@ curl http://localhost:3001/
 cd ~/PairMind/frontend
 
 # Set API base URL (Nginx proxies /api/ → FastAPI)
-echo "REACT_APP_API_URL=http://<EC2_PUBLIC_IP>/api" > .env
+echo "REACT_APP_API_URL=http://65.2.127.167/api" > .env
 
 npm install
 npm run build   # outputs to frontend/build/, base path is /app (see "homepage" in package.json)
@@ -226,7 +226,7 @@ Paste:
 ```nginx
 server {
     listen 80;
-    server_name <EC2_PUBLIC_IP>;
+    server_name 65.2.127.167;
 
     # / — landing/gate page (SSR, proxied to the Node process)
     location / {
@@ -269,7 +269,7 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-Open **http://<EC2_PUBLIC_IP>** in your browser — lands on the gate page; a verified token takes you into `/app`.
+Open **http://65.2.127.167** in your browser — lands on the gate page; a verified token takes you into `/app`.
 
 ---
 
