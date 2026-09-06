@@ -973,6 +973,14 @@ function Footer({ onRequestDemo }: { onRequestDemo: () => void }) {
             >
               Read the protocol
             </a>
+            <a
+              href="https://github.com/Pawon25/PairMind"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 border-2 border-ink px-4 py-2 font-mono text-[12px] uppercase tracking-[0.18em] hover:text-emerald-deal"
+            >
+              View on GitHub
+            </a>
           </div>
         </div>
         <div className="flex flex-col items-start gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft md:items-end">
