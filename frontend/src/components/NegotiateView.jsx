@@ -30,7 +30,7 @@ export default function NegotiateView({ sessionId }) {
             <div className="neg-empty">Negotiation starting…</div>
           )}
           {turns.map((turn) => (
-            <ChatBubble key={turn.turn} turn={turn} />
+            <ChatBubble key={turn.turn} turn={turn} sessionId={sessionId} />
           ))}
           {isProcessing && <IntermediateStep turns={turns} />}
           <div ref={bottomRef} />

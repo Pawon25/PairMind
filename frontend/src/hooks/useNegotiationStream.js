@@ -13,8 +13,6 @@ export function useNegotiationStream(sessionId) {
     if (!sessionId) return;
 
     const url = getStreamUrl(sessionId);
-    console.log('[SSE] Connecting to:', url);
-
     const es = new EventSource(url);
 
     const handleParsed = (parsed) => {
@@ -43,7 +41,6 @@ export function useNegotiationStream(sessionId) {
           break;
 
         case 'done':
-          console.log('[SSE] done received');
           doneRef.current = true;
           setIsProcessing(false);
           es.close();
@@ -56,7 +53,6 @@ export function useNegotiationStream(sessionId) {
 
     // All events come as unnamed messages from this backend
     es.onmessage = (e) => {
-      console.log('[SSE] message:', e.data);
       try {
         const parsed = JSON.parse(e.data);
         handleParsed(parsed);
@@ -71,7 +67,6 @@ export function useNegotiationStream(sessionId) {
     es.addEventListener('done',    (e) => { try { handleParsed({ type: 'done' });   } catch (_) {} });
     es.addEventListener('error',   (e) => { try { handleParsed(JSON.parse(e.data)); } catch (_) {} });
 
-    es.onopen  = () => console.log('[SSE] opened');
     es.onerror = () => {
       if (!doneRef.current && es.readyState === EventSource.CLOSED) {
         setStatus((prev) => prev === 'NEGOTIATING' ? 'ERROR' : prev);
