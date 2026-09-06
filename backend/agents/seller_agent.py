@@ -88,7 +88,7 @@ def run_seller_node(state: NegotiationState) -> NegotiationState:
     else:
         query = "pricing floor tier discount warranty expedited delivery"
 
-    chunks = seller_retrieve(query)
+    chunks = seller_retrieve(query, state["session_id"])
     context = "\n\n".join([
         f"[{c.get('filename', 'unknown')}, {c.get('section', 'General')}]\n{c.get('text', '')}"
         for c in chunks
