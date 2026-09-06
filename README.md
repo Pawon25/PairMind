@@ -336,69 +336,22 @@ The live demo is invite-only — every visitor needs a token before `/upload` or
 
 ---
 
+### 1.6 Redeploy after code changes
+
+```bash
+cd ~/PairMind && git pull
+cd frontend && npm run build
+sudo systemctl restart nginx
+
+# If backend changed:
+sudo systemctl restart pairmind-backend
+```
+
+---
+
 ## 2. Architecture Diagram
 
-```mermaid
-flowchart TD
-    subgraph Frontend["React Frontend · EC2 · :3000"]
-        UP[UploadPanel]
-        CF[ChatFeed]
-        DSP[DealStatePanel]
-        CM[CitationModal]
-        SB[StatusBanner]
-    end
-
-    subgraph Backend["FastAPI Backend · EC2 · :8000"]
-        RT[routes.py]
-        subgraph LangGraph["LangGraph StateGraph"]
-            direction TB
-            START([START]) --> BN[buyer_node]
-            BN --> CV1[citation_validator]
-            CV1 --> SN[seller_node]
-            SN --> CV2[citation_validator]
-            CV2 --> TC{termination_check}
-            TC -->|continue| BN
-            TC -->|terminate| END([END])
-        end
-        RT --> LangGraph
-        LangGraph --> SUM[build_summary]
-    end
-
-    subgraph Retrieval["Retrieval Layer"]
-        HR[hybrid_retriever\nBM25 + kNN + RRF]
-        OS[(OpenSearch · EC2 · :9200)]
-        HR --> OS
-    end
-
-    subgraph Tools["Tools"]
-        WS[web_search\nTavily — Seller only]
-        CV_TOOL[citation_validator\nchunk lookup]
-    end
-
-    subgraph Models["Models"]
-        CH[Claude Haiku\nclaude-haiku-4-5-20251001]
-        ST[sentence-transformers\nall-MiniLM-L6-v2 · 384-dim]
-    end
-
-    UP -->|POST /upload\nfile + tag| RT
-    UP -->|POST /negotiate| RT
-    CF -->|GET /negotiate/:id/stream\nSSE| RT
-    DSP -->|GET /negotiate/:id/state| RT
-
-    BN --> HR
-    SN --> HR
-    SN --> WS
-    CV1 --> CV_TOOL
-    CV2 --> CV_TOOL
-    CV_TOOL --> OS
-
-    BN --> CH
-    SN --> CH
-    ST -->|embed at ingestion| OS
-
-    RT -->|SSE events\nturn · summary · done · error| CF
-    SUM --> RT
-```
+![PairMind Architecture](./archtecture.jpg)
 
 ### Data Flow Summary
 
@@ -487,7 +440,7 @@ WALK_AWAY       → negotiation ends immediately
 
 ## 4. Prompt Design
 
-### 4.1 Buyer Agent System Prompt
+### 4.1 Buyer Agent System Prompt(Sample: Used placeholders in backend to dynamically construct w.r.t uploaded documents and context)
 
 ```
 You are the Buyer agent for Meridian Logistics. Your goal is to procure
