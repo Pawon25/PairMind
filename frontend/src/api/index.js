@@ -44,7 +44,7 @@ export async function uploadDocument(file, tag, sessionId) {
  * Load the built-in sample corpus into this session instead of uploading
  * your own documents. Returns an array of upload results, one per sample file.
  */
-export async function useSampleDocuments(sessionId) {
+export async function fetchSampleDocuments(sessionId) {
   const form = new FormData();
   form.append('session_id', sessionId);
   const { data } = await axios.post(`${BASE}/upload-sample`, form);
