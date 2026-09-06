@@ -15,14 +15,16 @@ from models.deal_state import NegotiationState
 from ingestion.loader import load_document
 from ingestion.chunker import chunk_documents
 from ingestion.embedder import embed_texts
-from ingestion.opensearch_store import upsert_chunks, fetch_citation_snippet, get_client, INDEX_NAME, create_index_if_not_exists
+from ingestion.opensearch_store import upsert_chunks, fetch_citation_snippet, delete_session_chunks
 
 router = APIRouter()
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # { session_id: { "state": NegotiationState, "events": list[dict], "done": bool, "summary": dict } }
 _sessions: dict[str, dict] = {}
-_staged_files: list[dict] = [] 
+# Staged uploads awaiting /negotiate, keyed by session_id (one browser session's
+# corpus) - NOT a shared global list, so concurrent visitors' uploads don't mix.
+_staged_files: dict[str, list[dict]] = {}
 
 
 VALID_TAGS = {"buyer-private", "seller-private", "shared"}
@@ -41,8 +43,8 @@ class UploadResponse(BaseModel):
 async def upload_document(
     file: UploadFile = File(...),
     tag: str = Form(...),
+    session_id: str = Form(...),
 ):
-    global _staged_files
     if tag not in VALID_TAGS:
         raise HTTPException(400, f"Invalid tag '{tag}'. Must be one of: {', '.join(VALID_TAGS)}")
     suffix = Path(file.filename).suffix.lower()
@@ -64,8 +66,8 @@ async def upload_document(
         raise HTTPException(422, f"No chunks extracted from '{file.filename}'. Check file content.")
 
     embeddings = embed_texts([c.page_content for c in chunks])
-    upsert_chunks(chunks, embeddings)
-    _staged_files.append({"filename": file.filename, "tag": tag})
+    upsert_chunks(chunks, embeddings, session_id)
+    _staged_files.setdefault(session_id, []).append({"filename": file.filename, "tag": tag})
 
     return UploadResponse(
         doc_id=str(uuid.uuid4()),
@@ -83,9 +85,10 @@ class NegotiateResponse(BaseModel):
 
 
 @router.post("/negotiate", response_model=NegotiateResponse)
-async def start_negotiation():
-    global _staged_files
-    session_id = str(uuid.uuid4())
+async def start_negotiation(session_id: str = Form(...)):
+    # session_id is client-generated (same one used for /upload calls) so the
+    # negotiation retrieves from exactly this browser session's own documents,
+    # not the whole shared index.
     initial_state: NegotiationState = {
         "session_id":           session_id,
         "messages":             [],
@@ -96,7 +99,7 @@ async def start_negotiation():
         "citation_retry":       False,
         "citation_retry_count": 0,
         "citation_error":       None,
-        "uploaded_files": list(_staged_files)
+        "uploaded_files": list(_staged_files.get(session_id, []))
     }
 
     _sessions[session_id] = {
@@ -105,7 +108,7 @@ async def start_negotiation():
         "done":    False,
         "summary": None,
     }
-    _staged_files = []
+    _staged_files.pop(session_id, None)
 
     asyncio.create_task(_run_negotiation_task(session_id, initial_state))
 
@@ -238,11 +241,9 @@ async def get_citation_snippet(source: str, section: str = ""):
     return {"source": source, "section": section, "snippet": snippet}
 
 @router.post("/reset")
-async def reset_session():
-    global _staged_files
-    client = get_client()
-    if client.indices.exists(index=INDEX_NAME):
-        client.indices.delete(index=INDEX_NAME)
-    create_index_if_not_exists()
-    _staged_files = []
+async def reset_session(session_id: str = Form(...)):
+    # Scoped to this session only - previously this dropped the entire shared
+    # index, which would wipe every other visitor's in-progress negotiation too.
+    delete_session_chunks(session_id)
+    _staged_files.pop(session_id, None)
     return {"status": "ready"}

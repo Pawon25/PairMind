@@ -1,15 +1,23 @@
 from ingestion.opensearch_store import get_client, INDEX_NAME
 from ingestion.embedder import embed_texts
 
-def hybrid_retrieve(query: str, tag_filter: list[str], top_k: int = 5) -> list[dict]:
+def hybrid_retrieve(query: str, tag_filter: list[str], session_id: str, top_k: int = 5) -> list[dict]:
     client = get_client()
     query_vec = embed_texts([query])[0]
+
+    # Every query is scoped to this negotiation's own uploaded documents (session_id),
+    # in addition to the buyer/seller/shared tag split - otherwise retrieval would
+    # draw from every visitor's documents in the shared index.
+    scope_filter = [
+        {"terms": {"tag": tag_filter}},
+        {"term": {"session_id": session_id}},
+    ]
 
     # Dense (kNN)
     knn_resp = client.search(index=INDEX_NAME, body={
         "size": top_k,
         "query": {"knn": {"embedding": {"vector": query_vec, "k": top_k}}},
-        "post_filter": {"terms": {"tag": tag_filter}}
+        "post_filter": {"bool": {"filter": scope_filter}}
     })
 
     # BM25
@@ -18,7 +26,7 @@ def hybrid_retrieve(query: str, tag_filter: list[str], top_k: int = 5) -> list[d
         "query": {
             "bool": {
                 "must":   {"match": {"text": query}},
-                "filter": {"terms": {"tag": tag_filter}}
+                "filter": scope_filter
             }
         }
     })
@@ -41,8 +49,8 @@ def hybrid_retrieve(query: str, tag_filter: list[str], top_k: int = 5) -> list[d
     return [docs[cid] for cid, _ in ranked[:top_k]]
 
 
-def buyer_retrieve(query: str) -> list[dict]:
-    return hybrid_retrieve(query, tag_filter=["buyer-private", "shared"])
+def buyer_retrieve(query: str, session_id: str) -> list[dict]:
+    return hybrid_retrieve(query, tag_filter=["buyer-private", "shared"], session_id=session_id)
 
-def seller_retrieve(query: str) -> list[dict]:
-    return hybrid_retrieve(query, tag_filter=["seller-private", "shared"])
+def seller_retrieve(query: str, session_id: str) -> list[dict]:
+    return hybrid_retrieve(query, tag_filter=["seller-private", "shared"], session_id=session_id)
