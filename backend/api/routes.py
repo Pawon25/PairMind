@@ -342,8 +342,8 @@ async def get_summary(session_id: str):
     return session["summary"]
 
 @router.get("/citation")
-async def get_citation_snippet(source: str, section: str = ""):
-    snippet = fetch_citation_snippet(source, section)
+async def get_citation_snippet(source: str, session_id: str, section: str = ""):
+    snippet = fetch_citation_snippet(source, section, session_id)
     if not snippet:
         raise HTTPException(404, "Citation snippet not found")
     return {"source": source, "section": section, "snippet": snippet}
