@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, FileText, X, ArrowRight, AlertCircle } from 'lucide-react';
-import { uploadDocument, startNegotiation, resetSession } from '../api/index';
+import { uploadDocument, startNegotiation, resetSession, fetchSampleDocuments } from '../api/index';
 import '../styles/UploadPanel.css';
 
 function makeSessionId() {
@@ -19,9 +19,31 @@ export default function UploadPanel({ onStart }) {
   const [activeTag, setActiveTag] = useState('buyer-private');
   const [dragging, setDragging]   = useState(false);
   const [starting, setStarting]   = useState(false);
+  const [loadingSample, setLoadingSample] = useState(false);
   const [error, setError]         = useState(null);
   const inputRef = useRef();
   const sessionIdRef = useRef(makeSessionId());
+
+  const useSample = async () => {
+    setError(null);
+    setLoadingSample(true);
+    try {
+      await resetSession(sessionIdRef.current);
+      const results = await fetchSampleDocuments(sessionIdRef.current);
+      setFiles(results.map((r) => ({
+        file: { name: r.filename },
+        tag: r.tag,
+        id: r.doc_id,
+        uploading: false,
+        error: null,
+        localId: r.doc_id,
+      })));
+    } catch (e) {
+      setError('Failed to load sample documents.');
+    } finally {
+      setLoadingSample(false);
+    }
+  };
 
   const addFiles = async (incoming) => {
     if (files.length === 0) {
@@ -84,6 +106,14 @@ export default function UploadPanel({ onStart }) {
           <p className="upload-subtitle">
             Upload private and shared documents for each agent before starting the negotiation.
           </p>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={useSample}
+            disabled={loadingSample}
+          >
+            {loadingSample ? 'Loading sample…' : 'Use Sample Documents Instead'}
+          </button>
         </div>
 
         {/* Tag selector */}

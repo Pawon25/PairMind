@@ -107,6 +107,25 @@ class UploadResponse(BaseModel):
     chunks_indexed: int
 
 
+def _ingest_document(path: str, tag: str, filename: str, session_id: str) -> int:
+    """Load, chunk, embed, and index one document under session_id. Returns chunks indexed.
+    Shared by /upload (an uploaded file, path is a temp copy) and /upload-sample
+    (a path already on disk).
+    """
+    docs = load_document(path, tag=tag)
+    for doc in docs:
+        doc.metadata["filename"] = filename
+
+    chunks = chunk_documents(docs)
+    if not chunks:
+        raise HTTPException(422, f"No chunks extracted from '{filename}'. Check file content.")
+
+    embeddings = embed_texts([c.page_content for c in chunks])
+    upsert_chunks(chunks, embeddings, session_id)
+    _staged_files.setdefault(session_id, []).append({"filename": filename, "tag": tag})
+    return len(chunks)
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -124,26 +143,46 @@ async def upload_document(
         tmp_path = tmp.name
 
     try:
-        docs = load_document(tmp_path, tag=tag)
-        for doc in docs:
-            doc.metadata["filename"] = file.filename
+        chunks_indexed = _ingest_document(tmp_path, tag, file.filename, session_id)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
-
-    chunks = chunk_documents(docs)
-    if not chunks:
-        raise HTTPException(422, f"No chunks extracted from '{file.filename}'. Check file content.")
-
-    embeddings = embed_texts([c.page_content for c in chunks])
-    upsert_chunks(chunks, embeddings, session_id)
-    _staged_files.setdefault(session_id, []).append({"filename": file.filename, "tag": tag})
 
     return UploadResponse(
         doc_id=str(uuid.uuid4()),
         filename=file.filename,
         tag=tag,
-        chunks_indexed=len(chunks),
+        chunks_indexed=chunks_indexed,
     )
+
+
+# ── POST /upload-sample ──────────────────────────────────────────────────────
+# Loads the built-in sample corpus into this session - lets a visitor skip
+# hunting for their own documents and go straight to a live negotiation.
+
+SAMPLE_DOCS = [
+    {"filename": "Meridian-Procurement-Memo_Buyer-Private.md", "tag": "buyer-private"},
+    {"filename": "RFQ-2026-MER-0847_Shared.md", "tag": "shared"},
+    {"filename": "ScanTech-Pricing-Sheet_Seller-Private.md", "tag": "seller-private"},
+]
+SAMPLE_DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+
+
+@router.post("/upload-sample", response_model=list[UploadResponse])
+async def upload_sample_documents(
+    session_id: str = Form(...),
+    _token: str = Depends(_require_valid_token),
+):
+    responses = []
+    for doc in SAMPLE_DOCS:
+        path = SAMPLE_DOCS_DIR / doc["filename"]
+        chunks_indexed = _ingest_document(str(path), doc["tag"], doc["filename"], session_id)
+        responses.append(UploadResponse(
+            doc_id=str(uuid.uuid4()),
+            filename=doc["filename"],
+            tag=doc["tag"],
+            chunks_indexed=chunks_indexed,
+        ))
+    return responses
 
 
 # ── POST /negotiate ───────────────────────────────────────────────────────────
@@ -303,8 +342,8 @@ async def get_summary(session_id: str):
     return session["summary"]
 
 @router.get("/citation")
-async def get_citation_snippet(source: str, section: str = ""):
-    snippet = fetch_citation_snippet(source, section)
+async def get_citation_snippet(source: str, session_id: str, section: str = ""):
+    snippet = fetch_citation_snippet(source, section, session_id)
     if not snippet:
         raise HTTPException(404, "Citation snippet not found")
     return {"source": source, "section": section, "snippet": snippet}
