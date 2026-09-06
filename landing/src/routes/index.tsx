@@ -106,11 +106,21 @@ const TURNS: Turn[] = [
 
 function Index() {
   const [demoOpen, setDemoOpen] = useState(false);
+  const [gateOpen, setGateOpen] = useState(false);
+  const [gateNotice, setGateNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("expired")) {
+      setGateNotice("Your access expired or reached its usage limit — enter a new token to continue.");
+      setGateOpen(true);
+    }
+  }, []);
+
   return (
     <div className="paper-grain relative min-h-screen text-ink">
       <ParallaxSheets />
       <div className="relative z-10">
-        <Nav onRequestDemo={() => setDemoOpen(true)} />
+        <Nav onRequestDemo={() => setDemoOpen(true)} onEnterToken={() => setGateOpen(true)} />
         <Hero />
         <Ledger />
         <HowItWorks />
@@ -119,6 +129,7 @@ function Index() {
         <Stack />
         <Footer onRequestDemo={() => setDemoOpen(true)} />
         <RequestDemoModal open={demoOpen} onClose={() => setDemoOpen(false)} />
+        <TokenGateModal open={gateOpen} onClose={() => setGateOpen(false)} notice={gateNotice} />
       </div>
     </div>
   );
@@ -179,7 +190,7 @@ function ParallaxSheets() {
 
 /* ------------------------------- nav -------------------------------- */
 
-function Nav({ onRequestDemo }: { onRequestDemo: () => void }) {
+function Nav({ onRequestDemo, onEnterToken }: { onRequestDemo: () => void; onEnterToken: () => void }) {
   return (
     <header className="border-b border-rule/80">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
@@ -193,13 +204,22 @@ function Nav({ onRequestDemo }: { onRequestDemo: () => void }) {
           <a href="#isolation" className="hover:text-ink">Isolation</a>
           <a href="#outcomes" className="hover:text-ink">Outcomes</a>
         </nav>
-        <button
-          type="button"
-          onClick={onRequestDemo}
-          className="border-0 bg-transparent p-0 font-mono text-[11px] uppercase tracking-[0.18em] underline decoration-brass decoration-2 underline-offset-4 hover:text-emerald-deal"
-        >
-          Request Demo
-        </button>
+        <div className="flex items-center gap-5">
+          <button
+            type="button"
+            onClick={onEnterToken}
+            className="border-0 bg-transparent p-0 font-mono text-[11px] uppercase tracking-[0.18em] underline decoration-brass decoration-2 underline-offset-4 hover:text-emerald-deal"
+          >
+            Have a token?
+          </button>
+          <button
+            type="button"
+            onClick={onRequestDemo}
+            className="border-0 bg-transparent p-0 font-mono text-[11px] uppercase tracking-[0.18em] underline decoration-brass decoration-2 underline-offset-4 hover:text-emerald-deal"
+          >
+            Request Demo
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -986,6 +1006,9 @@ function RequestDemoModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -1002,12 +1025,27 @@ function RequestDemoModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   if (!open) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const to = "pavanbasavaraj25@gmail.com";
-    const subject = `PairMind Demo Request from ${name}`;
-    const body = `Name: ${name}\nEmail: ${email}\n\nWhat they're exploring:\n${message}`;
-    window.location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/demo-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, message }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.detail || "Could not send your request. Try emailing directly instead.");
+        setSubmitting(false);
+        return;
+      }
+      setSent(true);
+    } catch {
+      setError("Could not reach the server. Try emailing directly instead.");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -1038,55 +1076,65 @@ function RequestDemoModal({ open, onClose }: { open: boolean; onClose: () => voi
           PairMind's live negotiation runs real Claude Haiku calls per session, so I review
           requests individually to keep it sustainable. Tell me a bit about what you'd like to see.
         </p>
-        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          <div>
-            <label htmlFor="demo-name" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
-              Name
-            </label>
-            <input
-              id="demo-name"
-              type="text"
-              required
-              placeholder="Jane Cooper"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1 w-full border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
-            />
-          </div>
-          <div>
-            <label htmlFor="demo-email" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
-              Email
-            </label>
-            <input
-              id="demo-email"
-              type="email"
-              required
-              placeholder="jane@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
-            />
-          </div>
-          <div>
-            <label htmlFor="demo-message" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
-              What are you exploring this for?
-            </label>
-            <textarea
-              id="demo-message"
-              placeholder="e.g. evaluating for a hiring process, curious about the agent architecture, considering it for a similar use case..."
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              rows={4}
-              className="mt-1 w-full resize-none border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
-            />
-          </div>
-          <button
-            type="submit"
-            className="inline-flex items-center gap-2 border-2 border-ink bg-ink px-4 py-2 font-mono text-[12px] uppercase tracking-[0.18em] text-paper hover:bg-emerald-deal hover:border-emerald-deal"
-          >
-            Send request
-          </button>
-        </form>
+        {sent ? (
+          <p className="mt-5 border-2 border-emerald-deal bg-emerald-deal/10 px-3 py-3 text-[14px] leading-relaxed text-ink">
+            Request received — I'll follow up by email with a token if it's a good fit.
+          </p>
+        ) : (
+          <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+            <div>
+              <label htmlFor="demo-name" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+                Name
+              </label>
+              <input
+                id="demo-name"
+                type="text"
+                required
+                placeholder="Jane Cooper"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1 w-full border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+              />
+            </div>
+            <div>
+              <label htmlFor="demo-email" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+                Email
+              </label>
+              <input
+                id="demo-email"
+                type="email"
+                required
+                placeholder="jane@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1 w-full border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+              />
+            </div>
+            <div>
+              <label htmlFor="demo-message" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+                What are you exploring this for?
+              </label>
+              <textarea
+                id="demo-message"
+                placeholder="e.g. evaluating for a hiring process, curious about the agent architecture, considering it for a similar use case..."
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                rows={4}
+                className="mt-1 w-full resize-none border-2 border-ink bg-paper px-3 py-2 font-sans text-[14px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+              />
+            </div>
+            {error && (
+              <p className="text-[13px] leading-relaxed text-rust-deal">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex items-center gap-2 border-2 border-ink bg-ink px-4 py-2 font-mono text-[12px] uppercase tracking-[0.18em] text-paper hover:bg-emerald-deal hover:border-emerald-deal disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? "Sending…" : "Send request"}
+            </button>
+          </form>
+        )}
         <p className="mt-4 font-mono text-[11px] text-ink-soft">
           Or email directly:{" "}
           <a
@@ -1096,6 +1144,123 @@ function RequestDemoModal({ open, onClose }: { open: boolean; onClose: () => voi
             pavanbasavaraj25@gmail.com
           </a>
         </p>
+      </div>
+    </div>
+  );
+}
+
+function TokenGateModal({
+  open,
+  onClose,
+  notice,
+}: {
+  open: boolean;
+  onClose: () => void;
+  notice: string | null;
+}) {
+  const [token, setToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/verify-token", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token.trim()}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.detail || "Could not verify token.");
+        setSubmitting(false);
+        return;
+      }
+      // Key must match ACCESS_TOKEN_KEY in frontend/src/api/index.js - same
+      // origin behind Nginx, so sessionStorage is shared between / and /app.
+      sessionStorage.setItem("pm_access_token", token.trim());
+      window.location.href = "/app";
+    } catch {
+      setError("Could not reach the server. Try again in a moment.");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="relative w-full max-w-md border-2 border-ink bg-paper p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="gate-heading"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 font-mono text-[18px] leading-none text-ink-soft hover:text-ink"
+          aria-label="Close"
+        >
+          ×
+        </button>
+        <h2 id="gate-heading" className="font-display text-2xl">
+          Enter your access token
+        </h2>
+        <p className="mt-2 text-[14px] leading-relaxed text-ink-soft">
+          Access is invite-only - if you don't have a token yet, use "Request Demo" instead.
+        </p>
+        {notice && (
+          <p className="mt-3 border-2 border-brass bg-brass/10 px-3 py-2 text-[13px] leading-relaxed text-ink">
+            {notice}
+          </p>
+        )}
+        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <div>
+            <label htmlFor="gate-token" className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+              Token
+            </label>
+            <input
+              id="gate-token"
+              type="text"
+              required
+              autoFocus
+              placeholder="Paste your token"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              className="mt-1 w-full border-2 border-ink bg-paper px-3 py-2 font-mono text-[13px] text-ink placeholder:text-ink-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink"
+            />
+          </div>
+          {error && (
+            <p className="text-[13px] leading-relaxed text-rust-deal">{error}</p>
+          )}
+          <button
+            type="submit"
+            disabled={submitting || !token.trim()}
+            className="inline-flex items-center gap-2 border-2 border-ink bg-ink px-4 py-2 font-mono text-[12px] uppercase tracking-[0.18em] text-paper hover:bg-emerald-deal hover:border-emerald-deal disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? "Verifying…" : "Enter"}
+          </button>
+        </form>
       </div>
     </div>
   );

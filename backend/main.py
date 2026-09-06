@@ -9,12 +9,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router
 from ingestion.opensearch_store import create_index_if_not_exists
+from auth.tokens import init_db as init_token_db
+from demo_requests_store import init_db as init_demo_requests_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle handler (replaces deprecated @app.on_event)."""
     create_index_if_not_exists()
+    init_token_db()
+    init_demo_requests_db()
     yield
 
 
