@@ -59,7 +59,7 @@ function parseRationale(text, citations, onCitationClick) {
   return parts;
 }
 
-export default function ChatBubble({ turn }) {
+export default function ChatBubble({ turn, sessionId }) {
   const [activeCitation, setActiveCitation] = useState(null);
 
   const isBuyer = turn.agent_id === 'buyer';
@@ -104,7 +104,7 @@ export default function ChatBubble({ turn }) {
       </div>
 
       {activeCitation && (
-        <CitationModal citation={activeCitation} onClose={() => setActiveCitation(null)} />
+        <CitationModal citation={activeCitation} onClose={() => setActiveCitation(null)} sessionId={sessionId} />
       )}
     </>
   );

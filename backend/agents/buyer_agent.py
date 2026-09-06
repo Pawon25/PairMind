@@ -85,7 +85,7 @@ def run_buyer_node(state: NegotiationState) -> NegotiationState:
     else:
         query = "procurement budget ceiling target price delivery deadline warranty"
 
-    chunks = buyer_retrieve(query)
+    chunks = buyer_retrieve(query, state["session_id"])
     context = "\n\n".join([
         f"[{c.get('filename', 'unknown')}, {c.get('section', 'General')}]\n{c.get('text', '')}"
         for c in chunks

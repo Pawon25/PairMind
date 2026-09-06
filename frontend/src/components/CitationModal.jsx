@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { X, FileText, Globe, Loader2 } from 'lucide-react';
 import '../styles/CitationModal.css';
 
-export default function CitationModal({ citation, onClose }) {
+export default function CitationModal({ citation, onClose, sessionId }) {
   const [snippet, setSnippet]   = useState(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
@@ -19,7 +19,7 @@ export default function CitationModal({ citation, onClose }) {
     setSnippet(null);
     setError(null);
 
-    const params = new URLSearchParams({ source: citation.source });
+    const params = new URLSearchParams({ source: citation.source, session_id: sessionId });
     if (citation.section) params.append('section', citation.section);
 
     fetch(`${process.env.REACT_APP_API_URL}/citation?${params}`)
@@ -27,7 +27,7 @@ export default function CitationModal({ citation, onClose }) {
       .then((d) => setSnippet(d.snippet))
       .catch(() => setError('Snippet not found'))
       .finally(() => setLoading(false));
-  }, [citation]);
+  }, [citation, sessionId]);
 
   if (!citation) return null;
 

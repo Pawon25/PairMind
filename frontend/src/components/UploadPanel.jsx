@@ -1,7 +1,12 @@
 import React, { useState, useRef } from 'react';
 import { Upload, FileText, X, ArrowRight, AlertCircle } from 'lucide-react';
-import { uploadDocument, startNegotiation } from '../api/index';
+import { uploadDocument, startNegotiation, resetSession, fetchSampleDocuments } from '../api/index';
 import '../styles/UploadPanel.css';
+
+function makeSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 const TAG_OPTIONS = [
   { value: 'buyer-private',  label: 'Buyer',  color: 'blue'  },
@@ -14,13 +19,36 @@ export default function UploadPanel({ onStart }) {
   const [activeTag, setActiveTag] = useState('buyer-private');
   const [dragging, setDragging]   = useState(false);
   const [starting, setStarting]   = useState(false);
+  const [loadingSample, setLoadingSample] = useState(false);
   const [error, setError]         = useState(null);
   const inputRef = useRef();
+  const sessionIdRef = useRef(makeSessionId());
+
+  const useSample = async () => {
+    setError(null);
+    setLoadingSample(true);
+    try {
+      await resetSession(sessionIdRef.current);
+      const results = await fetchSampleDocuments(sessionIdRef.current);
+      setFiles(results.map((r) => ({
+        file: { name: r.filename },
+        tag: r.tag,
+        id: r.doc_id,
+        uploading: false,
+        error: null,
+        localId: r.doc_id,
+      })));
+    } catch (e) {
+      setError('Failed to load sample documents.');
+    } finally {
+      setLoadingSample(false);
+    }
+  };
 
   const addFiles = async (incoming) => {
     if (files.length === 0) {
-    await fetch(`${process.env.REACT_APP_API_URL}/reset`, { method: 'POST' });
-  }
+      await resetSession(sessionIdRef.current);
+    }
     const newEntries = Array.from(incoming).map((f) => ({
       file: f,
       tag: activeTag,
@@ -34,7 +62,7 @@ export default function UploadPanel({ onStart }) {
 
     for (const entry of newEntries) {
       try {
-        const { doc_id } = await uploadDocument(entry.file, entry.tag);
+        const { doc_id } = await uploadDocument(entry.file, entry.tag, sessionIdRef.current);
         setFiles((prev) =>
           prev.map((f) => f.localId === entry.localId ? { ...f, id: doc_id, uploading: false } : f)
         );
@@ -60,7 +88,7 @@ export default function UploadPanel({ onStart }) {
     setError(null);
     setStarting(true);
     try {
-      const { session_id } = await startNegotiation();
+      const { session_id } = await startNegotiation(sessionIdRef.current);
       onStart(session_id);
     } catch (e) {
       setError('Failed to start negotiation. Is the backend running?');
@@ -78,6 +106,14 @@ export default function UploadPanel({ onStart }) {
           <p className="upload-subtitle">
             Upload private and shared documents for each agent before starting the negotiation.
           </p>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={useSample}
+            disabled={loadingSample}
+          >
+            {loadingSample ? 'Loading sample…' : 'Use Sample Documents Instead'}
+          </button>
         </div>
 
         {/* Tag selector */}

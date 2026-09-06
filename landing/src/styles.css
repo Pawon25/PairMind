@@ -1,0 +1,137 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-emerald-deal: var(--emerald-deal);
+  --color-rust-deal: var(--rust-deal);
+  --color-brass: var(--brass);
+  --color-rule: var(--rule);
+
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-border: var(--rule);
+  --color-ring: var(--ink);
+  --color-muted: var(--paper-2);
+  --color-muted-foreground: var(--ink-soft);
+
+  --font-display: "Fraunces", "Tiempos", Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root {
+  --paper: oklch(0.965 0.012 90);
+  --paper-2: oklch(0.945 0.015 88);
+  --ink: oklch(0.22 0.008 145);
+  --ink-soft: oklch(0.42 0.008 145);
+  --emerald-deal: oklch(0.42 0.09 165);
+  --rust-deal: oklch(0.43 0.13 35);
+  --brass: oklch(0.72 0.12 85);
+  --rule: oklch(0.85 0.012 90);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html, body {
+    background-color: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: var(--brass);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+}
+
+/* Paper grain — subtle, no slop */
+@utility paper-grain {
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(oklch(0.22 0.008 145 / 0.025) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+@utility ledger-spine {
+  background-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--ink) 0,
+    var(--ink) 100%
+  );
+}
+
+/* Wax-seal-ish citation pill */
+@utility wax-seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  background:
+    radial-gradient(circle at 35% 30%, oklch(0.82 0.13 85) 0%, var(--brass) 45%, oklch(0.58 0.11 75) 100%);
+  color: oklch(0.22 0.04 70);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  box-shadow:
+    inset 0 0 0 1px oklch(0.55 0.1 70 / 0.6),
+    inset 0 1px 1px oklch(1 0 0 / 0.4),
+    0 1px 0 oklch(0.22 0.008 145 / 0.15);
+}
+
+@utility stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: rotate(-1.5deg);
+  position: relative;
+}
+.stamp::before {
+  content: "";
+}
+
+@keyframes seal-in {
+  0% { opacity: 0; transform: rotate(-12deg) scale(1.4); }
+  60% { opacity: 1; transform: rotate(2deg) scale(0.95); }
+  100% { opacity: 1; transform: rotate(-3deg) scale(1); }
+}
+@utility animate-seal-in {
+  animation: seal-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes turn-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@utility animate-turn-in {
+  animation: turn-in 0.5s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-seal-in,
+  .animate-turn-in {
+    animation: none !important;
+  }
+}
