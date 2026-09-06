@@ -20,118 +20,187 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 
 ## 1. Quick Start — Setup Instructions
 
-> **Infrastructure layout:** Three separate EC2 instances — no Docker.
+> **Live demo:** **http://43.205.210.113**
 >
-> | Service | Host | Port |
-> |---|---|---|
-> | OpenSearch | EC2 — OpenSearch node | 9200 |
-> | Backend (FastAPI) | EC2 — Backend node | 8000 |
-> | Frontend (React CRA) | EC2 — Frontend node | 3000 |
+> **Infrastructure layout:** Single EC2 instance — no Docker.
+>
+> | Service | Host | Port | Exposed |
+> |---|---|---|---|
+> | Nginx (web server) | EC2 t3.small — ap-south-1 | 80 | ✅ Public |
+> | Backend (FastAPI) | same EC2, behind Nginx | 8000 | 🔒 Internal only |
+> | OpenSearch | same EC2 | 9200 | 🔒 Internal only |
+>
+> Nginx serves the React frontend as static files and proxies `/api/*` requests to FastAPI on `localhost:8000`.
 
-### 1.1 OpenSearch EC2
+### 1.1 EC2 Setup
 
-SSH into the OpenSearch instance and run a single-node cluster:
+**Instance:** Ubuntu 26.04, t3.small, 20 GB gp3, ap-south-1 (Mumbai)
+
+**Security Group — inbound rules:**
+
+| Port | Purpose |
+|---|---|
+| 22 | SSH |
+| 80 | HTTP — Nginx |
 
 ```bash
-# Install OpenSearch 2.x (Debian/Ubuntu)
-wget https://artifacts.opensearch.org/releases/bundle/opensearch/2.19.5/opensearch-2.19.5-linux-x64.tar.gz
-tar -xf opensearch-2.19.5-linux-x64.tar.gz
-cd opensearch-2.19.5
+# SSH in
+ssh -i "your-key.pem" ubuntu@43.205.210.113
 
-# Disable security plugin for this assessment environment
-echo "plugins.security.disabled: true" >> config/opensearch.yml
-echo "network.host: 0.0.0.0"          >> config/opensearch.yml
-echo "discovery.type: single-node"     >> config/opensearch.yml
+# Expand disk (after resizing volume to 20 GB in AWS Console)
+sudo growpart /dev/nvme0n1 1
+sudo resize2fs /dev/nvme0n1p1
 
-# Set JVM heap (t3.small — keep at 512 MB)
-sed -i 's/-Xms1g/-Xms512m/' config/jvm.options
-sed -i 's/-Xmx1g/-Xmx512m/' config/jvm.options
+# Add 1 GB swap (prevents OOM kills on t3.small)
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
-# Start (background)
-./bin/opensearch &
-
-# Verify
-curl http://localhost:9200/_cluster/health
+# Install system dependencies
+sudo apt update
+sudo apt install -y nginx
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
 ```
-
-EC2 Security Group: open inbound TCP **9200** to the backend EC2's private IP only.
 
 ---
 
-### 1.2 Backend EC2 (FastAPI)
+### 1.2 Backend
 
 ```bash
 # Clone repo
-git clone https://github.com/<your-handle>/PairMind.git
-cd PairMind/backend
+git clone https://github.com/Pawon25/PairMind.git
+cd ~/PairMind/backend
 
-# Python 3.12 venv
-python3.12 -m venv venv
+# Create and activate virtual environment
+python3 -m venv venv
 source venv/bin/activate
 
-# Install dependencies
-pip install fastapi uvicorn[standard] pydantic python-multipart \
-            anthropic langgraph langchain langchain-community \
-            opensearch-py sentence-transformers tavily-python \
-            unstructured markdown
+# Install dependencies (torch CPU-only to save disk space)
+pip install fastapi "uvicorn==0.24.0" pydantic python-multipart python-dotenv \
+            langgraph langchain langchain-community langchain-openai \
+            langchain-text-splitters anthropic tavily-python \
+            "opensearch-py==2.4.2" pypdf docx2txt markdown unstructured
+pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+pip install --no-cache-dir sentence-transformers
 
 # Configure environment
-cat > ../.env <<EOF
-ANTHROPIC_API_KEY=<your_key>
-TAVILY_API_KEY=<your_key>
-OPENSEARCH_URL=http://<opensearch_ec2_private_ip>:9200
-EOF
+nano .env
+# Add:
+# ANTHROPIC_API_KEY=<your_key>
+# TAVILY_API_KEY=<your_key>
+# OPENSEARCH_URL=http://localhost:9200
 
-# Ingest sample documents
-python -c "
-from ingestion.loader import load_document
-from ingestion.chunker import chunk_documents
-from ingestion.embedder import embed_texts
-from ingestion.opensearch_store import create_index_if_not_exists, upsert_chunks
-
-create_index_if_not_exists()
-for path, tag in [
-    ('../data/sample-docs/Meridian-Procurement-Memo_Buyer-Private.md', 'buyer-private'),
-    ('../data/sample-docs/RFQ-2026-MER-0847_Shared.md',                'shared'),
-    ('../data/sample-docs/ScanTech-Pricing-Sheet_Seller-Private.md',   'seller-private'),
-]:
-    docs   = load_document(path, tag)
-    chunks = chunk_documents(docs)
-    embeds = embed_texts([c.page_content for c in chunks])
-    upsert_chunks(chunks, embeds)
-print('Ingestion complete.')
-"
-
-# Start server
-uvicorn main:app --host 0.0.0.0 --port 8000
-
-# Verify
-curl http://localhost:8000/health
+# Register as a systemd service (auto-starts on reboot)
+sudo nano /etc/systemd/system/pairmind-backend.service
 ```
 
-EC2 Security Group: open inbound TCP **8000** to the frontend EC2's private IP and your local machine.
+Paste into the service file:
+
+```ini
+[Unit]
+Description=PairMind Backend
+After=network.target opensearch.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PairMind/backend
+EnvironmentFile=/home/ubuntu/PairMind/backend/.env
+ExecStart=/home/ubuntu/PairMind/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pairmind-backend
+sudo systemctl start pairmind-backend
+
+# Verify
+curl http://localhost:8000/health   # → {"status":"ok"}
+```
 
 ---
 
-### 1.3 Frontend EC2 (React CRA)
+### 1.3 Frontend
 
 ```bash
-git clone https://github.com/<your-handle>/PairMind.git
-cd PairMind/frontend
+cd ~/PairMind/frontend
 
-# Node 20
-node -v   # should be v20.x
+# Set API base URL (Nginx proxies /api/ → FastAPI)
+echo "REACT_APP_API_URL=http://43.205.210.113/api" > .env
 
 npm install
-
-# Point API base URL at the backend EC2
-echo "REACT_APP_API_BASE=http://<backend_ec2_public_ip>:8000" > .env
-
-npm start
-# → http://0.0.0.0:3000
+npm run build   # outputs to frontend/build/
 ```
 
-EC2 Security Group: open inbound TCP **3000** to the world (or your IP).
+---
+
+### 1.4 Nginx
+
+```bash
+sudo nano /etc/nginx/sites-available/pairmind
+```
+
+Paste:
+
+```nginx
+server {
+    listen 80;
+    server_name 43.205.210.113;
+
+    root /home/ubuntu/PairMind/frontend/build;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/pairmind /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/default
+
+# Allow Nginx to read files in /home/ubuntu
+sudo chmod o+x /home/ubuntu
+sudo chmod o+x /home/ubuntu/PairMind
+sudo chmod o+x /home/ubuntu/PairMind/frontend
+sudo chmod o+x /home/ubuntu/PairMind/frontend/build
+
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+Open **http://43.205.210.113** in your browser.
+
+---
+
+### 1.5 Redeploy after code changes
+
+```bash
+cd ~/PairMind
+git pull
+cd frontend && npm run build
+sudo systemctl restart nginx
+
+# If backend changed:
+sudo systemctl restart pairmind-backend
+```
 
 ---
 

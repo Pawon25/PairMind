@@ -147,6 +147,12 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# Secrets / credentials
+*.pem
+*.ppk
+*.key
+PairMind-Dummy/cmd.txt
+
 # Environments
 .env
 .envrc
