@@ -61,7 +61,7 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Install system dependencies
 sudo apt update
-sudo apt install -y nginx python3-venv python3-pip
+sudo apt install -y git nginx python3-venv python3-pip
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
