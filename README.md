@@ -27,10 +27,11 @@ PairMind is a full-stack AI application in which two autonomous agents — a **B
 > | Service | Host | Port | Exposed |
 > |---|---|---|---|
 > | Nginx (web server) | EC2 t3.small — ap-south-1 | 80 | ✅ Public |
+> | Landing (`landing/`, TanStack Start SSR) | same EC2, behind Nginx | 3001 | 🔒 Internal only |
 > | Backend (FastAPI) | same EC2, behind Nginx | 8000 | 🔒 Internal only |
 > | OpenSearch | same EC2 | 9200 | 🔒 Internal only |
 >
-> Nginx serves the React frontend as static files and proxies `/api/*` requests to FastAPI on `localhost:8000`.
+> Nginx routes by path on a single domain: `/` → the `landing/` gate page (proxied, it's an SSR Node app), `/app/*` → the React negotiation UI (`frontend/`, served as static files), `/api/*` → FastAPI on `localhost:8000`.
 
 ### 1.1 EC2 Setup
 
@@ -126,7 +127,50 @@ curl http://localhost:8000/health   # → {"status":"ok"}
 
 ---
 
-### 1.3 Frontend
+### 1.3 Landing (gate page)
+
+`landing/` is the public-facing landing/token-gate page — visitors land here first, and once past the gate they're sent into the real app at `/app`. It's a TanStack Start (SSR) app, so — unlike `frontend/` — it needs a running Node process, not just a static file drop.
+
+```bash
+cd ~/PairMind/landing
+
+npm install
+npm run build   # outputs to landing/.output/ (server + prerendered assets)
+
+# Register as a systemd service (auto-starts on reboot)
+sudo nano /etc/systemd/system/pairmind-landing.service
+```
+
+Paste into the service file:
+
+```ini
+[Unit]
+Description=PairMind Landing
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PairMind/landing
+Environment=PORT=3001
+ExecStart=/usr/bin/node /home/ubuntu/PairMind/landing/.output/server/index.mjs
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pairmind-landing
+sudo systemctl start pairmind-landing
+
+# Verify
+curl http://localhost:3001/
+```
+
+---
+
+### 1.4 Frontend
 
 ```bash
 cd ~/PairMind/frontend
@@ -135,12 +179,12 @@ cd ~/PairMind/frontend
 echo "REACT_APP_API_URL=http://43.205.210.113/api" > .env
 
 npm install
-npm run build   # outputs to frontend/build/
+npm run build   # outputs to frontend/build/, base path is /app (see "homepage" in package.json)
 ```
 
 ---
 
-### 1.4 Nginx
+### 1.5 Nginx
 
 ```bash
 sudo nano /etc/nginx/sites-available/pairmind
@@ -153,13 +197,21 @@ server {
     listen 80;
     server_name 43.205.210.113;
 
-    root /home/ubuntu/PairMind/frontend/build;
-    index index.html;
-
+    # / — landing/gate page (SSR, proxied to the Node process)
     location / {
-        try_files $uri $uri/ /index.html;
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
     }
 
+    # /app — the real negotiation UI, served as a static build
+    location /app/ {
+        alias /home/ubuntu/PairMind/frontend/build/;
+        try_files $uri $uri/ /app/index.html;
+    }
+
+    # /api — FastAPI backend
     location /api/ {
         proxy_pass http://localhost:8000/;
         proxy_http_version 1.1;
@@ -186,16 +238,19 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-Open **http://43.205.210.113** in your browser.
+Open **http://43.205.210.113** in your browser — lands on the gate page; a verified token takes you into `/app`.
 
 ---
 
-### 1.5 Redeploy after code changes
+### 1.6 Redeploy after code changes
 
 ```bash
 cd ~/PairMind
 git pull
-cd frontend && npm run build
+
+cd frontend && npm run build && cd ..
+cd landing && npm run build && cd ..
+sudo systemctl restart pairmind-landing
 sudo systemctl restart nginx
 
 # If backend changed:
@@ -557,19 +612,23 @@ PairMind/
 │   └── tools/
 │       ├── citation_validator.py # Citation lookup + retry logic
 │       └── web_search.py         # Tavily wrapper with graceful failure
-└── frontend/
+├── frontend/                      # the real negotiation UI — served under /app
+│   └── src/
+│       ├── components/
+│       │   ├── ChatBubble.js      # Agent turn — badge, terms, rationale, citations
+│       │   ├── CitationModal.js   # Source + section overlay
+│       │   ├── DealStatePanel.js  # Live deal terms sidebar
+│       │   ├── StatusBanner.js    # NEGOTIATING / AGREEMENT / WALK_AWAY / DEADLOCK
+│       │   ├── UploadPanel.js     # Drag-drop upload with tag selector
+│       │   └── IntermediateStep.js
+│       ├── hooks/
+│       │   └── useNegotiationStream.js  # SSE consumer — returns { turns, dealState, status }
+│       └── api/
+│           └── index.js           # Axios wrappers for all 5 endpoints
+└── landing/                       # public gate/landing page (TanStack Start, SSR) — served at /
     └── src/
-        ├── components/
-        │   ├── ChatBubble.js      # Agent turn — badge, terms, rationale, citations
-        │   ├── CitationModal.js   # Source + section overlay
-        │   ├── DealStatePanel.js  # Live deal terms sidebar
-        │   ├── StatusBanner.js    # NEGOTIATING / AGREEMENT / WALK_AWAY / DEADLOCK
-        │   ├── UploadPanel.js     # Drag-drop upload with tag selector
-        │   └── IntermediateStep.js
-        ├── hooks/
-        │   └── useNegotiationStream.js  # SSE consumer — returns { turns, dealState, status }
-        └── api/
-            └── index.js           # Axios wrappers for all 5 endpoints
+        ├── routes/                # __root.tsx + index.tsx (single route today)
+        └── components/
 ```
 
 ---
@@ -584,7 +643,8 @@ PairMind/
 | Vector + keyword store | OpenSearch 2.19.5 |
 | Web search | Tavily |
 | Backend API | FastAPI + Uvicorn |
-| Frontend | React CRA + plain CSS |
+| Frontend (app UI, `/app`) | React CRA + plain CSS |
+| Landing / gate page (`/`) | TanStack Start (SSR, Node) — built with Lovable, since detached |
 | Streaming | Server-Sent Events (SSE) |
 
 ---
