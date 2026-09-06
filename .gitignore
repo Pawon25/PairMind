@@ -151,6 +151,8 @@ activemq-data/
 *.pem
 *.ppk
 *.key
+backend/tokens.db
+backend/demo_requests.db
 PairMind-Dummy/cmd.txt
 
 # Environments

@@ -17,6 +17,11 @@ def get_client():
 def create_index_if_not_exists():
     client = get_client()
     if client.indices.exists(index=INDEX_NAME):
+        # Existing index predates the session_id field — add it non-destructively
+        # (adding a new field to a mapping is safe; changing an existing one isn't).
+        client.indices.put_mapping(index=INDEX_NAME, body={
+            "properties": {"session_id": {"type": "keyword"}}
+        })
         return
     client.indices.create(index=INDEX_NAME, body={
         "settings": {"index": {"knn": True}},
@@ -27,33 +32,45 @@ def create_index_if_not_exists():
                     "dimension": EMBEDDING_DIM,
                     "method": {"name": "hnsw", "engine": "lucene"}
                 },
-                "text":     {"type": "text"},
-                "filename": {"type": "keyword"},
-                "tag":      {"type": "keyword"},
-                "chunk_id": {"type": "keyword"},
-                "section":  {"type": "keyword"},
+                "text":       {"type": "text"},
+                "filename":   {"type": "keyword"},
+                "tag":        {"type": "keyword"},
+                "chunk_id":   {"type": "keyword"},
+                "section":    {"type": "keyword"},
+                "session_id": {"type": "keyword"},
             }
         }
     })
 
-def _chunk_id(text: str, filename: str) -> str:
-    return hashlib.md5(f"{filename}:{text}".encode()).hexdigest()
+def _chunk_id(text: str, filename: str, session_id: str) -> str:
+    return hashlib.md5(f"{session_id}:{filename}:{text}".encode()).hexdigest()
 
-def upsert_chunks(chunks: list, embeddings: list[list[float]]):
+def upsert_chunks(chunks: list, embeddings: list[list[float]], session_id: str):
     client = get_client()
     for chunk, embedding in zip(chunks, embeddings):
-        cid = _chunk_id(chunk.page_content, chunk.metadata["filename"])
-        # Skip if already indexed (embedding cache)
+        cid = _chunk_id(chunk.page_content, chunk.metadata["filename"], session_id)
+        # Skip if already indexed (embedding cache) - scoped per session_id above,
+        # so this never skips indexing for a different visitor's identical content.
         if client.exists(index=INDEX_NAME, id=cid):
             continue
         client.index(index=INDEX_NAME, id=cid, body={
-            "chunk_id": cid,
-            "text":     chunk.page_content,
-            "filename": chunk.metadata["filename"],
-            "tag":      chunk.metadata["tag"],
-            "section":  chunk.metadata.get("section", ""),
-            "embedding": embedding,
+            "chunk_id":   cid,
+            "text":       chunk.page_content,
+            "filename":   chunk.metadata["filename"],
+            "tag":        chunk.metadata["tag"],
+            "section":    chunk.metadata.get("section", ""),
+            "embedding":  embedding,
+            "session_id": session_id,
         })
+
+def delete_session_chunks(session_id: str):
+    """Scoped reset — deletes only this session's indexed chunks, not the shared index."""
+    client = get_client()
+    if not client.indices.exists(index=INDEX_NAME):
+        return
+    client.delete_by_query(index=INDEX_NAME, body={
+        "query": {"term": {"session_id": session_id}}
+    }, refresh=True)
 
 # def fetch_citation_snippet(filename: str, section: str) -> str | None:
 #     """Fetch the most relevant chunk for a given filename + section."""
