@@ -6,8 +6,9 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Depends
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from agents.orchestrator import build_graph, build_summary
@@ -16,8 +17,34 @@ from ingestion.loader import load_document
 from ingestion.chunker import chunk_documents
 from ingestion.embedder import embed_texts
 from ingestion.opensearch_store import upsert_chunks, fetch_citation_snippet, delete_session_chunks
+from auth.tokens import check_token, consume_negotiation, TokenError
+from demo_requests_store import save_request
 
 router = APIRouter()
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def _require_valid_token(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
+    """Gate dependency for /upload - valid + unexpired, doesn't burn negotiation quota."""
+    if creds is None:
+        raise HTTPException(401, "Missing access token")
+    try:
+        check_token(creds.credentials)
+    except TokenError as e:
+        raise HTTPException(401, str(e))
+    return creds.credentials
+
+
+def _require_and_consume_negotiation(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
+    """Gate dependency for /negotiate - the only endpoint that spends a use."""
+    if creds is None:
+        raise HTTPException(401, "Missing access token")
+    try:
+        consume_negotiation(creds.credentials)
+    except TokenError as e:
+        raise HTTPException(401, str(e))
+    return creds.credentials
 
 # ── In-memory session store ───────────────────────────────────────────────────
 # { session_id: { "state": NegotiationState, "events": list[dict], "done": bool, "summary": dict } }
@@ -28,6 +55,47 @@ _staged_files: dict[str, list[dict]] = {}
 
 
 VALID_TAGS = {"buyer-private", "seller-private", "shared"}
+
+
+# ── POST /auth/verify-token ──────────────────────────────────────────────────
+
+class VerifyTokenResponse(BaseModel):
+    valid: bool
+    uses_remaining: int
+    expires_at: str
+
+
+@router.post("/auth/verify-token", response_model=VerifyTokenResponse)
+async def verify_token(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)):
+    """Gate check for the landing page - validates without consuming a use."""
+    if creds is None:
+        raise HTTPException(401, "Missing access token")
+    try:
+        row = check_token(creds.credentials)
+    except TokenError as e:
+        raise HTTPException(401, str(e))
+    return VerifyTokenResponse(
+        valid=True,
+        uses_remaining=row["uses_remaining"],
+        expires_at=row["expires_at"],
+    )
+
+
+# ── POST /demo-request ───────────────────────────────────────────────────────
+# No auth - this is the entry point for people who don't have a token yet.
+
+class DemoRequestBody(BaseModel):
+    name: str
+    email: str
+    message: str = ""
+
+
+@router.post("/demo-request")
+async def create_demo_request(body: DemoRequestBody):
+    if not body.name.strip() or not body.email.strip():
+        raise HTTPException(400, "Name and email are required")
+    save_request(body.name.strip(), body.email.strip(), body.message.strip())
+    return {"status": "received"}
 
 
 # ── POST /upload ──────────────────────────────────────────────────────────────
@@ -44,6 +112,7 @@ async def upload_document(
     file: UploadFile = File(...),
     tag: str = Form(...),
     session_id: str = Form(...),
+    _token: str = Depends(_require_valid_token),
 ):
     if tag not in VALID_TAGS:
         raise HTTPException(400, f"Invalid tag '{tag}'. Must be one of: {', '.join(VALID_TAGS)}")
@@ -85,7 +154,7 @@ class NegotiateResponse(BaseModel):
 
 
 @router.post("/negotiate", response_model=NegotiateResponse)
-async def start_negotiation(session_id: str = Form(...)):
+async def start_negotiation(session_id: str = Form(...), _token: str = Depends(_require_and_consume_negotiation)):
     # session_id is client-generated (same one used for /upload calls) so the
     # negotiation retrieves from exactly this browser session's own documents,
     # not the whole shared index.

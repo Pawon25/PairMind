@@ -2,6 +2,31 @@ import axios from 'axios';
 
 const BASE = process.env.REACT_APP_API_URL
 
+export const ACCESS_TOKEN_KEY = 'pm_access_token';
+
+// Attach the gate token (set by the landing page after a successful
+// /auth/verify-token) to every request automatically.
+axios.interceptors.request.use((config) => {
+  const token = sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// A 401 here means the token is missing/expired/exhausted - bounce back to
+// the gate page rather than leaving the user stuck on a broken /app.
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+      window.location.href = '/?expired=1';
+    }
+    return Promise.reject(error);
+  }
+);
+
 /**
  * Upload a document with a tag, scoped to this browser session's corpus.
  * Returns { doc_id }
