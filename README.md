@@ -236,7 +236,15 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 
-    # /app — the real negotiation UI, served as a static build
+    # /app — the real negotiation UI, served as a static build.
+    # The bare "/app" (no trailing slash) doesn't match the block below on
+    # its own — nginx prefix matching needs the trailing slash — so without
+    # this redirect it silently falls through to "/" (the landing app's own
+    # 404) instead of the frontend.
+    location = /app {
+        return 301 /app/;
+    }
+
     location /app/ {
         alias /home/ubuntu/PairMind/frontend/build/;
         try_files $uri $uri/ /app/index.html;
